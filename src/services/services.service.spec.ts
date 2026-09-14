@@ -114,4 +114,23 @@ describe('ServicesService', () => {
       expect.objectContaining({ activo: false }),
     );
   });
+
+  it('reactivate pone activo en true', async () => {
+    repo.findOne.mockResolvedValue({ ...baseService, activo: false });
+
+    const result = await servicesService.reactivate(baseService.id);
+
+    expect(result.activo).toBe(true);
+    expect(repo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ activo: true }),
+    );
+  });
+
+  it('reactivate lanza NotFoundException si el servicio no existe', async () => {
+    repo.findOne.mockResolvedValue(null);
+
+    await expect(servicesService.reactivate('no-existe')).rejects.toThrow(
+      NotFoundException,
+    );
+  });
 });

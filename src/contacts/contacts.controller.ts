@@ -57,4 +57,11 @@ export class ContactsController {
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.contactsService.softDelete(id);
   }
+
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Patch(':id/reactivate')
+  reactivate(@Param('id', ParseUUIDPipe) id: string) {
+    return this.contactsService.reactivate(id);
+  }
 }

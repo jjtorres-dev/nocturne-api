@@ -57,4 +57,11 @@ export class ServicesController {
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.servicesService.softDelete(id);
   }
+
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @Patch(':id/reactivate')
+  reactivate(@Param('id', ParseUUIDPipe) id: string) {
+    return this.servicesService.reactivate(id);
+  }
 }

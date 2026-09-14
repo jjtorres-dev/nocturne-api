@@ -106,4 +106,23 @@ describe('ContactsService', () => {
       expect.objectContaining({ activo: false }),
     );
   });
+
+  it('reactivate pone activo en true', async () => {
+    repo.findOne.mockResolvedValue({ ...baseContact, activo: false });
+
+    const result = await contactsService.reactivate(baseContact.id);
+
+    expect(result.activo).toBe(true);
+    expect(repo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ activo: true }),
+    );
+  });
+
+  it('reactivate lanza NotFoundException si el contacto no existe', async () => {
+    repo.findOne.mockResolvedValue(null);
+
+    await expect(contactsService.reactivate('no-existe')).rejects.toThrow(
+      NotFoundException,
+    );
+  });
 });

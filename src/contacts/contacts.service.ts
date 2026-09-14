@@ -50,4 +50,10 @@ export class ContactsService {
     contact.activo = false;
     return this.contactsRepository.save(contact);
   }
+
+  async reactivate(id: string): Promise<Contact> {
+    const contact = await this.findOne(id);
+    contact.activo = true;
+    return this.contactsRepository.save(contact);
+  }
 }

@@ -54,4 +54,10 @@ export class ServicesService {
     service.activo = false;
     return this.servicesRepository.save(service);
   }
+
+  async reactivate(id: string): Promise<Service> {
+    const service = await this.findOne(id);
+    service.activo = true;
+    return this.servicesRepository.save(service);
+  }
 }
