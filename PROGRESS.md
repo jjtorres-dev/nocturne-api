@@ -35,7 +35,7 @@ Si se recrea el servicio de Railway del frontend desde cero, hay que volver
 a setear esta variable o el deploy sirve una app en blanco / 404 en rutas
 que no sean `/`.
 
-## Fase 1 — Catálogo de Servicios + Contactos — 🚧 en curso
+## Fase 1 — Catálogo de Servicios + Contactos — ✅ completa (2026-09-14)
 
 - [x] Migraciones de TypeORM configuradas (dejamos `synchronize` atrás para
       cambios de schema, tanto en local como en producción a partir de
@@ -45,19 +45,33 @@ que no sean `/`.
       (decimal, soporta fracciones como 2.5), `pantallasMax` (nullable),
       `precioBase`, `activo`
 - [x] CRUD de Servicios (backend) — listar con filtro por `tipo`/`activo`,
-      detalle, crear/editar/eliminar solo admin, eliminar es soft delete
-      (`activo=false`, sin borrado físico)
-- [ ] CRUD de Servicios (UI) — pendiente, es la siguiente tarea
+      detalle, crear/editar, soft delete (`activo=false`, sin borrado
+      físico) y reactivar (`PATCH /:id/reactivate`), todo solo admin salvo
+      lectura
+- [x] CRUD de Servicios (UI) — listado (`mat-table`) con filtros de tipo y
+      estado, formulario en modal (crear/editar), desactivar/reactivar con
+      confirmación + snackbar
 - [x] Entidad Contacto (clientes/proveedores/revendedores) — `whatsapp`,
       `tipo` (`CLIENTE_FINAL`/`PROVEEDOR`/`REVENDEDOR`), `activo`
-- [x] CRUD de Contactos (backend) — mismo patrón que Servicios
-- [ ] CRUD de Contactos (UI) — pendiente
+- [x] CRUD de Contactos (backend) — mismo patrón que Servicios, incluye
+      reactivar
+- [x] CRUD de Contactos (UI) — mismo patrón que Servicios
 - [x] Migración inicial (`InitialSchema`) generada, revisada a mano (solo
       crea `services`/`contacts` y sus enums, no toca `users`) y corrida
-      contra Postgres local
-- [ ] **Pendiente**: correr la migración inicial contra Postgres de
-      producción en Railway (lo hacemos juntos, como con el synchronize
-      temporal de la Fase 0)
+      contra Postgres local **y contra producción en Railway**
+- [x] **Verificado end-to-end** en local (docker-compose + `npm run
+      start:dev` + `ng serve`) y en producción (Railway): login, crear,
+      listar, filtrar, editar, desactivar y reactivar en ambos módulos
+
+### Nota — fix de UI: WhatsApp con label superpuesto al placeholder
+
+En `contacto-form-dialog`, el input de `whatsapp` tenía `placeholder`
+además de `mat-label`, lo que le rompía el floating label (quedaba
+superpuesto con el texto de ejemplo) a diferencia del resto de los campos.
+Se corrigió moviendo el texto de ejemplo a `mat-hint` en vez de
+`placeholder`. Si se agrega un campo nuevo con formato de ejemplo (acá o en
+Cuentas/Ventas más adelante), usar `mat-hint`, no `placeholder` +
+`mat-label` juntos.
 
 ### Nota — bug encontrado y corregido: PATCH devolvía campos pisados
 
