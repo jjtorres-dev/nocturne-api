@@ -35,12 +35,46 @@ Si se recrea el servicio de Railway del frontend desde cero, hay que volver
 a setear esta variable o el deploy sirve una app en blanco / 404 en rutas
 que no sean `/`.
 
-## Fase 1 — Catálogo de Servicios + Contactos
+## Fase 1 — Catálogo de Servicios + Contactos — 🚧 en curso
 
-- [ ] Entidad Servicio (Netflix, Disney, Crunchyroll, etc.)
-- [ ] CRUD de Servicios (backend + UI)
-- [ ] Entidad Contacto (clientes/proveedores)
-- [ ] CRUD de Contactos (backend + UI)
+- [x] Migraciones de TypeORM configuradas (dejamos `synchronize` atrás para
+      cambios de schema, tanto en local como en producción a partir de
+      ahora — ver `src/database/`)
+- [x] Entidad Servicio (Netflix, Disney, Crunchyroll, etc.) — `tipo`
+      (`CON_PERFILES`/`SIN_PERFILES`/`FAMILIAR`/`IPTV`), `duracionMeses`
+      (decimal, soporta fracciones como 2.5), `pantallasMax` (nullable),
+      `precioBase`, `activo`
+- [x] CRUD de Servicios (backend) — listar con filtro por `tipo`/`activo`,
+      detalle, crear/editar/eliminar solo admin, eliminar es soft delete
+      (`activo=false`, sin borrado físico)
+- [ ] CRUD de Servicios (UI) — pendiente, es la siguiente tarea
+- [x] Entidad Contacto (clientes/proveedores/revendedores) — `whatsapp`,
+      `tipo` (`CLIENTE_FINAL`/`PROVEEDOR`/`REVENDEDOR`), `activo`
+- [x] CRUD de Contactos (backend) — mismo patrón que Servicios
+- [ ] CRUD de Contactos (UI) — pendiente
+- [x] Migración inicial (`InitialSchema`) generada, revisada a mano (solo
+      crea `services`/`contacts` y sus enums, no toca `users`) y corrida
+      contra Postgres local
+- [ ] **Pendiente**: correr la migración inicial contra Postgres de
+      producción en Railway (lo hacemos juntos, como con el synchronize
+      temporal de la Fase 0)
+
+### Nota — bug encontrado y corregido: PATCH devolvía campos pisados
+
+`ServicesService.update`/`ContactsService.update` hacían
+`Object.assign(entity, dto)` antes de guardar. El `dto` que arma el
+`ValidationPipe` (con `transform: true`) es una instancia de la clase DTO,
+y por `useDefineForClassFields` (default de TS con target ES2022+) esa
+instancia tiene **todas** las propiedades declaradas como propias, en
+`undefined` las que no vinieron en el body. `Object.assign` pisaba con esos
+`undefined` los valores ya cargados en memoria — la fila en la base de
+datos quedaba bien (TypeORM ignora columnas `undefined` al armar el
+`UPDATE`), pero la respuesta HTTP del PATCH salía con campos faltantes o en
+`null`. Se corrigió reemplazando el merge manual por
+`repository.update(id, dto)` + un `findOne` fresco para la respuesta. Tiene
+test de regresión en `services.service.spec.ts` / `contacts.service.spec.ts`.
+Si se agrega un DTO de update nuevo en fases futuras, evitar el patrón
+`Object.assign(entity, dto)`.
 
 ## Fase 2 — Cuentas + Perfiles
 
