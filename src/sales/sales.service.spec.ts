@@ -89,6 +89,7 @@ describe('SalesService', () => {
     find: ReturnType<typeof vi.fn>;
     query: ReturnType<typeof vi.fn>;
     createQueryBuilder: ReturnType<typeof vi.fn>;
+    manager: { query: ReturnType<typeof vi.fn> };
   };
   let queryBuilder: {
     where: ReturnType<typeof vi.fn>;
@@ -126,6 +127,7 @@ describe('SalesService', () => {
       find: vi.fn(),
       query: vi.fn().mockResolvedValue([{ nextval: '1' }]),
       createQueryBuilder: vi.fn(() => queryBuilder),
+      manager: { query: vi.fn().mockResolvedValue([{ nextval: '1' }]) },
     };
     accountsService = {
       findOne: vi.fn().mockResolvedValue(cuenta),
@@ -211,11 +213,11 @@ describe('SalesService', () => {
     });
 
     it('genera codigoVenta desde la secuencia con formato V-00001', async () => {
-      salesRepo.query.mockResolvedValue([{ nextval: '7' }]);
+      salesRepo.manager.query.mockResolvedValue([{ nextval: '7' }]);
 
       await salesService.create(createDto);
 
-      expect(salesRepo.query).toHaveBeenCalledWith(
+      expect(salesRepo.manager.query).toHaveBeenCalledWith(
         "SELECT nextval('sales_codigo_venta_seq') AS nextval",
       );
       expect(salesRepo.create).toHaveBeenCalledWith(

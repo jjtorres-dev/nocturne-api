@@ -22,6 +22,7 @@ import { round2 } from '../common/round2.js';
 import { PaymentsService } from '../payments/payments.service.js';
 import { PaymentType } from '../payments/payment-type.enum.js';
 import type { RenewSaleDto } from './dto/renew-sale.dto.js';
+import { generateCodigoVenta } from './codigo-venta.util.js';
 
 const DIAS_ALERTA_DEFAULT = 3;
 
@@ -70,7 +71,7 @@ export class SalesService {
       perfilId,
       servicioId: cuenta.servicioId,
       duracionMeses: servicio.duracionMeses,
-      codigoVenta: await this.generateCodigoVenta(),
+      codigoVenta: await generateCodigoVenta(this.salesRepository.manager),
       tasaCambio,
       precioPEN: round2(dto.precio * tasaCambio),
       activo: true,
@@ -310,10 +311,4 @@ export class SalesService {
     }
   }
 
-  private async generateCodigoVenta(): Promise<string> {
-    const [{ nextval }] = await this.salesRepository.query(
-      "SELECT nextval('sales_codigo_venta_seq') AS nextval",
-    );
-    return `V-${String(nextval).padStart(5, '0')}`;
-  }
 }

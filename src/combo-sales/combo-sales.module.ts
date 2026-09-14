@@ -1,11 +1,15 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { VentaCombo } from './entities/venta-combo.entity.js';
+import { ComboSalesService } from './combo-sales.service.js';
+import { ComboSalesController } from './combo-sales.controller.js';
+import { ContactsModule } from '../contacts/contacts.module.js';
+import { CombosModule } from '../combos/combos.module.js';
 
-// ComboSalesService/ComboSalesController llegan en los próximos commits;
-// este registro es lo mínimo necesario para que TypeORM resuelva la
-// entidad VentaCombo (Sale y Payment ya la referencian por relación).
 @Module({
-  imports: [TypeOrmModule.forFeature([VentaCombo])],
+  imports: [TypeOrmModule.forFeature([VentaCombo]), ContactsModule, CombosModule],
+  controllers: [ComboSalesController],
+  providers: [ComboSalesService],
+  exports: [ComboSalesService],
 })
 export class ComboSalesModule {}
