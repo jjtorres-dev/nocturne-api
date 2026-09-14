@@ -79,6 +79,19 @@ export class ProfilesService {
     return this.profilesRepository.save(profile);
   }
 
+  // La usa SalesService para sincronizar (o liberar, con null) el cliente
+  // asignado a un perfil vendido.
+  async assignCliente(
+    accountId: string,
+    id: string,
+    clienteId: string | null,
+  ): Promise<void> {
+    await this.profilesRepository.update(
+      { id, cuentaId: accountId },
+      { clienteId },
+    );
+  }
+
   private async assertUnderScreenLimit(accountId: string): Promise<void> {
     const account = await this.accountsService.findOne(accountId);
     const service = await this.servicesService.findOne(account.servicioId);

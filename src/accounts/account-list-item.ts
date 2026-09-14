@@ -4,6 +4,7 @@ export interface AccountListItem {
   id: string;
   servicioId: string;
   proveedorId: string | null;
+  clienteId: string | null;
   correo: string;
   fechaInicio: string;
   fechaFin: string;

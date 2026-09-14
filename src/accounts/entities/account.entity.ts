@@ -31,6 +31,16 @@ export class Account {
   @JoinColumn({ name: 'proveedor_id' })
   proveedor: Contact | null;
 
+  // Mismo propósito que Profile.clienteId: para servicios SIN_PERFILES/IPTV
+  // donde se vende la cuenta completa en vez de un perfil individual
+  // (Fase 3 — Ventas). Lo sincroniza SalesService, no se edita directo acá.
+  @Column({ type: 'uuid', name: 'cliente_id', nullable: true })
+  clienteId: string | null;
+
+  @ManyToOne(() => Contact, { nullable: true })
+  @JoinColumn({ name: 'cliente_id' })
+  cliente: Contact | null;
+
   @Column({ type: 'varchar' })
   correo: string;
 

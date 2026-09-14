@@ -14,6 +14,7 @@ const LIST_SELECT = {
   id: true,
   servicioId: true,
   proveedorId: true,
+  clienteId: true,
   correo: true,
   fechaInicio: true,
   fechaFin: true,
@@ -117,6 +118,12 @@ export class AccountsService {
     const account = await this.findOne(id);
     account.activo = true;
     return this.accountsRepository.save(account);
+  }
+
+  // La usa SalesService para sincronizar (o liberar, con null) el cliente
+  // asignado a una cuenta vendida completa (servicios SIN_PERFILES/IPTV).
+  async assignCliente(id: string, clienteId: string | null): Promise<void> {
+    await this.accountsRepository.update(id, { clienteId });
   }
 
   private async assertReferencesExist(

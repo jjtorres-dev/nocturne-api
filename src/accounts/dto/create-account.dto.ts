@@ -18,6 +18,10 @@ export class CreateAccountDto {
   @IsUUID()
   proveedorId?: string;
 
+  @IsOptional()
+  @IsUUID()
+  clienteId?: string;
+
   @IsEmail()
   correo: string;
 

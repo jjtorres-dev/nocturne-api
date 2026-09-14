@@ -20,6 +20,10 @@ export class UpdateAccountDto {
   proveedorId?: string;
 
   @IsOptional()
+  @IsUUID()
+  clienteId?: string;
+
+  @IsOptional()
   @IsEmail()
   correo?: string;
 
