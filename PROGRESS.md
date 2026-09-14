@@ -343,7 +343,7 @@ Si se agrega un DTO de update nuevo en fases futuras, evitar el patrón
       WhatsApp del listado abriendo el chat directo con un número real
       de Contactos (antes se quedaba cargando por el bug de arriba)
 
-## Fase 5 — Contabilidad / Caja — 🚧 en curso (backend completo)
+## Fase 5 — Contabilidad / Caja — ✅ completa (2026-09-14)
 
 - [x] Entidad `Payment` (`src/payments/`, tabla `payments`) y `Expense`
       (`src/expenses/`, tabla `expenses`) — nombres en inglés por el mismo
@@ -427,8 +427,42 @@ Si se agrega un DTO de update nuevo en fases futuras, evitar el patrón
       exactamente `ingresos=85` (50+35) con `inversion=100` (el costo de
       la cuenta) — ambos pagos sumados correctamente. Datos de prueba
       borrados después
-- [ ] **Pendiente**: frontend de Contabilidad (reportes + registro de
-      Gastos)
+- [x] Migración y backend corridos y verificados contra producción en
+      Railway (nocturne-api), igual que las fases anteriores
+- [x] Frontend de Gastos (`nocturne-web`, `/expenses`) — mismo patrón que
+      Servicios/Contactos: listado con filtro por activo, modal de
+      crear/editar (descripcion, monto, moneda, tasaCambio, metodoPago,
+      fecha), soft-delete/reactivar con confirmación
+- [x] Frontend de Contabilidad (`nocturne-web`, `/accounting`) — date
+      pickers Desde/Hasta (vacíos por defecto, dejan que el backend
+      aplique su default de mes actual) + botón Aplicar; 4 tarjetas de
+      resumen (Ingresos/Inversión/Gastos/Ganancia, esta última
+      destacada visualmente); tablas "Por servicio" y "Por método de
+      pago"; gráfico de barras de la línea de tiempo con Chart.js
+      (`npm install chart.js`) y selector Día/Semana/Mes
+- [x] **Bug encontrado y corregido en frontend**: el pipe `currency` de
+      Angular con código `'PEN'` cae al código ISO ("PEN") en vez del
+      símbolo "S/", porque el proyecto nunca registró el locale `es-PE`
+      (los símbolos narrow de monedas poco comunes en `en-US`, el
+      locale por defecto, no están en esa tabla). Se creó un pipe propio
+      `SolesPipe` (`shared/soles.pipe.ts`) que antepone "S/" a mano en
+      vez de depender de datos de locale no cargados. Se aplicó no solo
+      en Contabilidad sino en todos los montos en soles del panel que
+      antes se mostraban como decimal crudo o con el código de moneda
+      pegado: Gastos, Ventas, Vencimientos, Servicios (`precioBase`) y
+      el detalle de Cuenta (`costo`). Para los campos que sí tienen
+      moneda propia (`Sale.precio`, `Expense.monto`, pueden no ser PEN),
+      se usa el equivalente ya calculado en soles (`precioPEN`/
+      `montoPEN`) con `SolesPipe`, mostrando el monto original entre
+      paréntesis solo cuando la moneda no es PEN — aplicar el símbolo
+      de soles directo sobre esos campos habría sido incorrecto (un
+      gasto de 15 USD se habría visto como "S/ 15.00"). 7 tests de
+      regresión nuevos cubren ambos casos (PEN directo y moneda
+      extranjera con el monto original visible)
+- [x] Probado contra el backend local con datos de prueba reales
+      (servicios, cuenta, venta y gasto creados a propósito): los 4
+      endpoints de Contabilidad y `/expenses` devolvieron exactamente
+      los montos esperados, consumidos correctamente por el frontend
 
 ## Fase 6 — Combos
 
