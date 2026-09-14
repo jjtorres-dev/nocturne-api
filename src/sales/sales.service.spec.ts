@@ -9,6 +9,8 @@ import type { AccountsService } from '../accounts/accounts.service.js';
 import type { ProfilesService } from '../accounts/profiles/profiles.service.js';
 import type { ServicesService } from '../services/services.service.js';
 import type { ContactsService } from '../contacts/contacts.service.js';
+import type { PaymentsService } from '../payments/payments.service.js';
+import { PaymentType } from '../payments/payment-type.enum.js';
 
 describe('SalesService', () => {
   const baseSale: Sale = {
@@ -103,6 +105,7 @@ describe('SalesService', () => {
   };
   let servicesService: { findOne: ReturnType<typeof vi.fn> };
   let contactsService: { findOne: ReturnType<typeof vi.fn> };
+  let paymentsService: { create: ReturnType<typeof vi.fn> };
   let salesService: SalesService;
 
   beforeEach(() => {
@@ -132,6 +135,7 @@ describe('SalesService', () => {
     };
     servicesService = { findOne: vi.fn().mockResolvedValue(servicioConPerfiles) };
     contactsService = { findOne: vi.fn().mockResolvedValue({ id: 'contact-1' }) };
+    paymentsService = { create: vi.fn().mockResolvedValue(undefined) };
 
     salesService = new SalesService(
       salesRepo as unknown as Repository<Sale>,
@@ -139,6 +143,7 @@ describe('SalesService', () => {
       profilesService as unknown as ProfilesService,
       servicesService as unknown as ServicesService,
       contactsService as unknown as ContactsService,
+      paymentsService as unknown as PaymentsService,
     );
   });
 
@@ -254,6 +259,25 @@ describe('SalesService', () => {
       );
       expect(profilesService.assignCliente).not.toHaveBeenCalled();
     });
+
+    it('crea el Pago inicial (tipo=venta_inicial) con los datos de precio de la venta', async () => {
+      salesRepo.save.mockImplementationOnce(async (entity) => ({
+        ...entity,
+        id: 'sale-1',
+      }));
+
+      await salesService.create({ ...createDto, precio: 10, tasaCambio: 3.5 });
+
+      expect(paymentsService.create).toHaveBeenCalledWith({
+        ventaId: 'sale-1',
+        monto: 10,
+        moneda: Moneda.PEN,
+        tasaCambio: 3.5,
+        metodoPago: 'Yape',
+        fecha: '2026-01-05',
+        tipo: PaymentType.VENTA_INICIAL,
+      });
+    });
   });
 
   describe('softDelete', () => {
@@ -327,6 +351,15 @@ describe('SalesService', () => {
   });
 
   describe('renew', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-02-10T12:00:00Z'));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     it('extiende fechaFin sumando duracionMeses (snapshot de la venta)', async () => {
       salesRepo.findOne.mockResolvedValue({
         ...baseSale,
@@ -338,6 +371,57 @@ describe('SalesService', () => {
 
       expect(salesRepo.update).toHaveBeenCalledWith('sale-1', {
         fechaFin: '2026-03-05',
+        precio: baseSale.precio,
+        moneda: baseSale.moneda,
+        tasaCambio: baseSale.tasaCambio,
+        metodoPago: baseSale.metodoPago,
+        precioPEN: baseSale.precioPEN,
+      });
+    });
+
+    it('sin body: crea el Pago de renovación con los valores actuales de la venta y fecha de hoy', async () => {
+      salesRepo.findOne.mockResolvedValue({ ...baseSale });
+
+      await salesService.renew('sale-1');
+
+      expect(paymentsService.create).toHaveBeenCalledWith({
+        ventaId: 'sale-1',
+        monto: baseSale.precio,
+        moneda: baseSale.moneda,
+        tasaCambio: baseSale.tasaCambio,
+        metodoPago: baseSale.metodoPago,
+        fecha: '2026-02-10',
+        tipo: PaymentType.RENOVACION,
+      });
+    });
+
+    it('con body: usa los valores enviados, recalcula precioPEN y crea el Pago con ellos', async () => {
+      salesRepo.findOne.mockResolvedValue({ ...baseSale });
+
+      await salesService.renew('sale-1', {
+        precio: 20,
+        tasaCambio: 3.5,
+        metodoPago: 'Plin',
+      });
+
+      expect(salesRepo.update).toHaveBeenCalledWith(
+        'sale-1',
+        expect.objectContaining({
+          precio: 20,
+          tasaCambio: 3.5,
+          metodoPago: 'Plin',
+          moneda: baseSale.moneda,
+          precioPEN: 70,
+        }),
+      );
+      expect(paymentsService.create).toHaveBeenCalledWith({
+        ventaId: 'sale-1',
+        monto: 20,
+        moneda: baseSale.moneda,
+        tasaCambio: 3.5,
+        metodoPago: 'Plin',
+        fecha: '2026-02-10',
+        tipo: PaymentType.RENOVACION,
       });
     });
   });

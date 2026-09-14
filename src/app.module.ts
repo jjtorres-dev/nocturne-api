@@ -12,6 +12,7 @@ import { ContactsModule } from './contacts/contacts.module.js';
 import { AccountsModule } from './accounts/accounts.module.js';
 import { ProfilesModule } from './accounts/profiles/profiles.module.js';
 import { SalesModule } from './sales/sales.module.js';
+import { PaymentsModule } from './payments/payments.module.js';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { SalesModule } from './sales/sales.module.js';
     AccountsModule,
     ProfilesModule,
     SalesModule,
+    PaymentsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -16,3 +16,11 @@ export function addMonthsToDate(dateStr: string, months: number): string {
 
   return date.toISOString().slice(0, 10);
 }
+
+// Fecha "de hoy" para el Payment que genera un renew(): a diferencia de
+// vencimiento (que usa CURRENT_DATE de Postgres para no depender del reloj
+// de quien llama), acá sí es el reloj del propio servidor el que emite el
+// pago, igual que createdAt en el resto de las entidades.
+export function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}

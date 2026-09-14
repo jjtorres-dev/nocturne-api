@@ -122,6 +122,13 @@ describe('Sales vencimiento (e2e)', () => {
   });
 
   afterAll(async () => {
+    // Fase 5: cada Sale creada acá genera su Payment inicial automático
+    // (ver SalesService.create), así que hay que borrarlo antes que la
+    // venta o la FK payments.venta_id lo impide.
+    await dataSource.query(
+      'DELETE FROM payments WHERE venta_id IN (SELECT id FROM sales WHERE cuenta_id = $1)',
+      [cuentaId],
+    );
     await dataSource.query('DELETE FROM sales WHERE cuenta_id = $1', [
       cuentaId,
     ]);

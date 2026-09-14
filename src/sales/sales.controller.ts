@@ -19,6 +19,7 @@ import { CreateSaleDto } from './dto/create-sale.dto.js';
 import { UpdateSaleDto } from './dto/update-sale.dto.js';
 import { QuerySaleDto } from './dto/query-sale.dto.js';
 import { QuerySummaryDto } from './dto/query-summary.dto.js';
+import { RenewSaleDto } from './dto/renew-sale.dto.js';
 
 @UseGuards(JwtAuthGuard)
 @Controller('sales')
@@ -73,7 +74,7 @@ export class SalesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
   @Post(':id/renew')
-  renew(@Param('id', ParseUUIDPipe) id: string) {
-    return this.salesService.renew(id);
+  renew(@Param('id', ParseUUIDPipe) id: string, @Body() dto: RenewSaleDto) {
+    return this.salesService.renew(id, dto);
   }
 }

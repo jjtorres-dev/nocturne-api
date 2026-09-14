@@ -15,11 +15,14 @@ import { ProfilesService } from '../accounts/profiles/profiles.service.js';
 import { ServicesService } from '../services/services.service.js';
 import { ContactsService } from '../contacts/contacts.service.js';
 import { ServiceType } from '../services/service-type.enum.js';
-import { addMonthsToDate } from './date.util.js';
+import { addMonthsToDate, todayIso } from './date.util.js';
 import { VencimientoFiltro } from './vencimiento.enum.js';
 import type { SalesSummary } from './sales-summary.js';
+import { round2 } from '../common/round2.js';
+import { PaymentsService } from '../payments/payments.service.js';
+import { PaymentType } from '../payments/payment-type.enum.js';
+import type { RenewSaleDto } from './dto/renew-sale.dto.js';
 
-const round2 = (value: number) => Math.round(value * 100) / 100;
 const DIAS_ALERTA_DEFAULT = 3;
 
 @Injectable()
@@ -31,6 +34,7 @@ export class SalesService {
     private readonly profilesService: ProfilesService,
     private readonly servicesService: ServicesService,
     private readonly contactsService: ContactsService,
+    private readonly paymentsService: PaymentsService,
   ) {}
 
   async create(dto: CreateSaleDto): Promise<Sale> {
@@ -82,6 +86,16 @@ export class SalesService {
     } else {
       await this.accountsService.assignCliente(dto.cuentaId, dto.clienteId);
     }
+
+    await this.paymentsService.create({
+      ventaId: saved.id,
+      monto: saved.precio,
+      moneda: saved.moneda,
+      tasaCambio: saved.tasaCambio,
+      metodoPago: saved.metodoPago,
+      fecha: saved.fechaInicio,
+      tipo: PaymentType.VENTA_INICIAL,
+    });
 
     return saved;
   }
@@ -217,10 +231,33 @@ export class SalesService {
     return saved;
   }
 
-  async renew(id: string): Promise<Sale> {
+  async renew(id: string, dto: RenewSaleDto = {}): Promise<Sale> {
     const sale = await this.findOne(id);
     const fechaFin = addMonthsToDate(sale.fechaFin, sale.duracionMeses);
-    await this.salesRepository.update(id, { fechaFin });
+    const precio = dto.precio ?? sale.precio;
+    const moneda = dto.moneda ?? sale.moneda;
+    const tasaCambio = dto.tasaCambio ?? sale.tasaCambio;
+    const metodoPago = dto.metodoPago ?? sale.metodoPago;
+
+    await this.salesRepository.update(id, {
+      fechaFin,
+      precio,
+      moneda,
+      tasaCambio,
+      metodoPago,
+      precioPEN: round2(precio * tasaCambio),
+    });
+
+    await this.paymentsService.create({
+      ventaId: id,
+      monto: precio,
+      moneda,
+      tasaCambio,
+      metodoPago,
+      fecha: todayIso(),
+      tipo: PaymentType.RENOVACION,
+    });
+
     return this.findOne(id);
   }
 
