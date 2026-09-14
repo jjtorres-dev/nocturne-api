@@ -1,0 +1,6 @@
+export enum ServiceType {
+  CON_PERFILES = 'CON_PERFILES',
+  SIN_PERFILES = 'SIN_PERFILES',
+  FAMILIAR = 'FAMILIAR',
+  IPTV = 'IPTV',
+}
