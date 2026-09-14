@@ -13,6 +13,7 @@ import { Account } from '../../accounts/entities/account.entity.js';
 import { Profile } from '../../accounts/profiles/entities/profile.entity.js';
 import { Service } from '../../services/entities/service.entity.js';
 import { Moneda } from '../moneda.enum.js';
+import { VentaCombo } from '../../combo-sales/entities/venta-combo.entity.js';
 
 @Entity({ name: 'sales' })
 export class Sale {
@@ -107,6 +108,18 @@ export class Sale {
 
   @Column({ type: 'boolean', default: true })
   activo: boolean;
+
+  // No nula solo cuando esta venta es la "hija" de un combo (ver
+  // ComboSalesService.create): en ese caso precio=0 y el dinero real se
+  // registra en el Payment de la VentaCombo, no acá. SalesService bloquea
+  // reactivate/deactivate/renew directos sobre estas filas (ver
+  // assertNoPerteneceAUnCombo) — se gestionan desde /api/combo-sales.
+  @Column({ type: 'uuid', name: 'venta_combo_id', nullable: true })
+  ventaComboId: string | null;
+
+  @ManyToOne(() => VentaCombo, { nullable: true })
+  @JoinColumn({ name: 'venta_combo_id' })
+  ventaCombo: VentaCombo | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

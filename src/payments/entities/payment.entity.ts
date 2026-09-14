@@ -11,18 +11,30 @@ import { decimalTransformer } from '../../common/decimal.transformer.js';
 import { Sale } from '../../sales/entities/sale.entity.js';
 import { Moneda } from '../../sales/moneda.enum.js';
 import { PaymentType } from '../payment-type.enum.js';
+import { VentaCombo } from '../../combo-sales/entities/venta-combo.entity.js';
 
 @Entity({ name: 'payments' })
 export class Payment {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'uuid', name: 'venta_id' })
-  ventaId: string;
+  // Un Payment pertenece a una Sale O a una VentaCombo, nunca ambas ni
+  // ninguna (CHECK constraint a nivel de DB, ver la migración
+  // AddCombos). SalesService crea con ventaId; ComboSalesService con
+  // ventaComboId.
+  @Column({ type: 'uuid', name: 'venta_id', nullable: true })
+  ventaId: string | null;
 
-  @ManyToOne(() => Sale)
+  @ManyToOne(() => Sale, { nullable: true })
   @JoinColumn({ name: 'venta_id' })
-  venta: Sale;
+  venta: Sale | null;
+
+  @Column({ type: 'uuid', name: 'venta_combo_id', nullable: true })
+  ventaComboId: string | null;
+
+  @ManyToOne(() => VentaCombo, { nullable: true })
+  @JoinColumn({ name: 'venta_combo_id' })
+  ventaCombo: VentaCombo | null;
 
   @Column({
     type: 'decimal',

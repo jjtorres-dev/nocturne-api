@@ -34,6 +34,8 @@ describe('SalesService', () => {
     metodoPago: 'Yape',
     renovacionAutomatica: false,
     activo: true,
+    ventaComboId: null,
+    ventaCombo: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
