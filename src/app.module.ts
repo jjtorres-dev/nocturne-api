@@ -11,6 +11,7 @@ import { ServicesModule } from './services/services.module.js';
 import { ContactsModule } from './contacts/contacts.module.js';
 import { AccountsModule } from './accounts/accounts.module.js';
 import { ProfilesModule } from './accounts/profiles/profiles.module.js';
+import { SalesModule } from './sales/sales.module.js';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { ProfilesModule } from './accounts/profiles/profiles.module.js';
     ContactsModule,
     AccountsModule,
     ProfilesModule,
+    SalesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
