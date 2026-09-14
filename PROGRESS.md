@@ -464,10 +464,126 @@ Si se agrega un DTO de update nuevo en fases futuras, evitar el patrón
       endpoints de Contabilidad y `/expenses` devolvieron exactamente
       los montos esperados, consumidos correctamente por el frontend
 
-## Fase 6 — Combos
+## Fase 6 — Combos — 🚧 en curso (backend completo)
 
-- [ ] Entidad Combo (agrupación de servicios/perfiles con precio propio)
-- [ ] Ventas de combos
+- [x] Entidad `Combo` (`src/combos/`) — `nombre`, `descripcion` (nullable),
+      `servicios` (many-to-many con `Service` vía tabla de unión
+      `combo_servicios`), `precioCombo`, `activo`. CRUD completo, mismo
+      patrón admin-only/soft-delete/reactivate que Servicios. **Decisión no
+      pedida explícitamente**: mínimo 2 servicios por combo (`ArrayMinSize`
+      en los DTOs) — un "combo" de un solo servicio no tiene sentido como
+      concepto de negocio, sería un Service normal
+- [x] Entidad `VentaCombo` (`src/combo-sales/`, tabla `combo_sales`) — el
+      "wrapper" de una venta de combo: `clienteId`, `comboId`,
+      `codigoVenta` (secuencia propia `combo_sales_codigo_venta_seq`,
+      prefijo `C-`), `fechaInicio`/`fechaFin`, `duracionMeses` propio (a
+      diferencia de `Sale`, que copia la duración del catálogo de un único
+      Service, acá el combo agrupa servicios que pueden tener duraciones
+      de catálogo distintas, así que necesita la suya propia para
+      `renew()`), `precio`/`moneda`/`tasaCambio`/`precioPEN`,
+      `metodoPago`, `renovacionAutomatica`, `activo`
+- [x] `Sale` extendida con `ventaComboId` (FK nullable a `VentaCombo`): las
+      ventas "hijas" de un combo (una por servicio) son filas normales de
+      `sales`, comparten la misma secuencia `sales_codigo_venta_seq` y la
+      misma lógica de exclusividad de cuenta/perfil que las ventas
+      sueltas — así que vender el mismo perfil dos veces (una suelta, otra
+      dentro de un combo) también se detecta sin código nuevo. Su
+      `precio`/`precioPEN` quedan en 0: el dinero real se registra una
+      sola vez, en el `Payment` de la `VentaCombo`
+- [x] `Payment` extendida con `ventaComboId` (FK nullable) y `ventaId`
+      ahora nullable — un Payment pertenece a una `Sale` **o** a una
+      `VentaCombo`, nunca ambas ni ninguna, reforzado con un `CHECK`
+      constraint a nivel de base de datos (no solo validación de
+      aplicación) por ser un invariante crítico para la integridad de
+      Contabilidad
+- [x] `POST /api/combo-sales` — todo en una sola transacción de DB
+      (`DataSource.transaction()`): valida que las asignaciones cubran
+      exactamente los servicios del combo (ni de más ni de menos, sin
+      duplicados) y la exclusividad de cada cuenta/perfil **antes** de
+      escribir una sola fila; recién si todo pasa crea la `VentaCombo`,
+      una `Sale` hija por asignación (con `cuentaId`/`perfilId` reales,
+      `clienteId` sincronizado, `ventaComboId` apuntando al wrapper) y un
+      único `Payment` `tipo=venta_inicial` ligado a la `VentaCombo`. Si
+      cualquier asignación falla, 409 (o 400 si es un error estructural,
+      p.ej. perfilId faltante) con el detalle de qué servicio falló, y no
+      queda absolutamente nada creado
+- [x] **Decisión de arquitectura no trivial**: dentro de la transacción no
+      se pudo reusar `AccountsService`/`ProfilesService`/`SalesService`
+      (usan sus propios repositorios inyectados, atados a la conexión por
+      defecto, no al `EntityManager` de la transacción — llamarlos ahí
+      habría roto la atomicidad). `ComboSalesService` reimplementa la
+      misma lógica de exclusividad pero corriendo sobre el
+      `EntityManager` transaccional directamente. Se extrajo
+      `generateCodigoVenta` a `sales/codigo-venta.util.ts` (recibe un
+      `EntityManager`, no un `Repository`) para poder compartirlo entre
+      `SalesService` y `ComboSalesService` sin duplicar la secuencia
+- [x] `SalesService` bloquea `reactivate`/`deactivate`/`renew` directos
+      sobre una `Sale` con `ventaComboId` no nulo (400, explica que se
+      gestiona desde el combo). `GET /sales` las sigue devolviendo
+      normalmente (Vencimientos y el recordatorio de WhatsApp por
+      servicio individual siguen funcionando)
+- [x] `GET /api/combo-sales` (filtros `clienteId`/`comboId`/`activo`),
+      `GET /:id` (incluye el detalle de las ventas hijas con su
+      servicio/cuenta/perfil), `PATCH` (solo
+      `fechaFin`/`precio`/`moneda`/`tasaCambio`/`metodoPago`/
+      `renovacionAutomatica`, igual que Ventas — reasignar
+      cliente/combo/asignaciones implica desactivar y crear de nuevo)
+- [x] `DELETE /api/combo-sales/:id` — soft delete transaccional: desactiva
+      el wrapper Y todas sus ventas hijas Y libera sus cuentas/perfiles
+      (clienteId a null), todo o nada
+- [x] `PATCH /api/combo-sales/:id/reactivate` — revalida la exclusividad
+      de **todas** las ventas hijas antes de reactivar cualquiera (409 si
+      alguna ya no está libre), y solo entonces reactiva + resincroniza
+      clienteId en todas
+- [x] `POST /api/combo-sales/:id/renew` — extiende `fechaFin` del wrapper
+      usando su propio `duracionMeses`, sincroniza `fechaFin` en todas las
+      ventas hijas, crea un `Payment` `tipo=renovacion` ligado al wrapper
+      (no a las hijas)
+- [x] Migración `AddCombos` — crea `combos`, `combo_servicios` (tabla de
+      unión), `combo_sales` (+ su secuencia de código), agrega
+      `venta_combo_id` nullable a `sales` y a `payments`, hace `venta_id`
+      nullable en `payments` y agrega el `CHECK` constraint
+      `venta_id`/`venta_combo_id` mutuamente excluyentes. Generada con
+      `migration:generate` y revisada/completada a mano (la secuencia y
+      el `CHECK` no los genera TypeORM), corrida contra Postgres local
+- [x] **Bug encontrado en la propia infraestructura de tests**: los
+      archivos e2e corren en paralelo por defecto en Vitest, y varios
+      miden agregados globales por delta antes/después
+      (`SalesService.summary`, `AccountingService`) — al agregar
+      `combo-sales.e2e-spec.ts` (que crea ventas con `fechaFin` futuro)
+      esas mediciones en otros archivos empezaron a fallar de forma
+      intermitente por contaminación cruzada. Se corrigió de raíz con
+      `fileParallelism: false` en `vitest.config.e2e.ts` en vez de otro
+      parche de aislamiento por fecha
+- [x] Tests unitarios: `CombosService` (CRUD, resolución de
+      `servicioIds` a `Service`), `ComboSalesService` — cobertura de
+      asignaciones (conteo exacto, duplicados, fuera del combo),
+      validaciones por asignación (perfil requerido/prohibido según
+      tipo de servicio), **el caso crítico de rollback** (2 asignaciones,
+      la segunda falla por exclusividad → se verifica que `save()` no se
+      llamó ni una sola vez, ni siquiera para la primera asignación que sí
+      había validado bien), `softDelete`/`reactivate`/`renew`; y en
+      `SalesService`, que `reactivate`/`deactivate`/`renew` rechazan una
+      venta hija de combo
+- [x] Test e2e nuevo (`test/combo-sales.e2e-spec.ts`): camino feliz
+      (VentaCombo + 2 hijas + 1 Payment), bloqueo de acciones directas
+      sobre una hija, `renew` sincronizando fechas, `deactivate`
+      liberando cuentas, **el rollback verificado contra Postgres real**
+      (conteos de `combo_sales`/`sales`/`payments` idénticos antes y
+      después del intento fallido, y la cuenta que sí había validado
+      sigue sin cliente asignado), y `/accounting/summary` sumando el
+      ingreso de un combo vendido (fecha aislada, número exacto, misma
+      técnica que `accounting.e2e-spec.ts`)
+- [x] Probado manualmente el caso de rollback contra el servidor local:
+      combo de 2 servicios, cuenta del segundo ya ocupada por otra venta
+      → 409 con el servicio señalado, conteos de `combo_sales`/`sales`/
+      `payments` verificados idénticos antes y después (0/12/12), y la
+      cuenta del primer servicio (que sí había validado) confirmada sin
+      `clienteId` asignado. Reintentado liberando la cuenta ocupada:
+      combo creado correctamente (`C-00020`, 2 ventas hijas con
+      `precio=0`). Datos de prueba borrados después
+- [ ] **Pendiente**: frontend de Combos (catálogo + registro de ventas
+      de combo)
 
 ## Fase 7 — Extras
 
