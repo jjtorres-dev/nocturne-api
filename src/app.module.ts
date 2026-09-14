@@ -26,7 +26,8 @@ import { AuthModule } from './auth/auth.module.js';
         password: configService.get<string>('database.password'),
         database: configService.get<string>('database.name'),
         autoLoadEntities: true,
-        synchronize: configService.get<string>('NODE_ENV') !== 'production',
+        // TEMPORAL: crear schema inicial en prod, revertir después
+        synchronize: true,
       }),
     }),
     UsersModule,
