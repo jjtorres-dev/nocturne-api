@@ -90,12 +90,50 @@ test de regresión en `services.service.spec.ts` / `contacts.service.spec.ts`.
 Si se agrega un DTO de update nuevo en fases futuras, evitar el patrón
 `Object.assign(entity, dto)`.
 
-## Fase 2 — Cuentas + Perfiles
+## Fase 2 — Cuentas + Perfiles — 🚧 en curso (backend completo)
 
-- [ ] Entidad Cuenta (credenciales cifradas con AES)
-- [ ] Entidad Perfil (perfil dentro de una cuenta, asociado a un Servicio)
-- [ ] CRUD de Cuentas + Perfiles (backend + UI)
-- [ ] Cifrado/descifrado de credenciales en el backend
+- [x] Cifrado AES-256-GCM (`src/common/encryption/`) — `encrypt`/`decrypt`
+      con Node `crypto` nativo, clave en `ENCRYPTION_KEY` (32 bytes hex,
+      `openssl rand -hex 32`), `ValueTransformer` de TypeORM
+      (`encrypted-column.transformer.ts`) para aplicarlo a columnas sin
+      tocar el resto de la lógica de negocio
+- [x] Entidad Cuenta (`src/accounts/`) — `servicioId`/`proveedorId` (FK
+      reales, con constraint en DB), `correo`, `claveServicio`/
+      `claveCorreo` cifradas, fechas, `costo`, `metodoPago`, `url`,
+      `renovacionAutomatica`, `activo` (soft delete)
+- [x] Entidad Perfil (`src/accounts/profiles/`, subrecurso anidado bajo
+      cuenta — rutas `/api/accounts/:accountId/profiles`) — `cuentaId`,
+      `nombre`, `pin` cifrado, `clienteId` (FK a Contact, se usa en Fase 3),
+      `activo`
+- [x] CRUD de Cuentas (backend) — `GET /accounts` **nunca** incluye
+      `claveServicio`/`claveCorreo` (select explícito a nivel de query, ni
+      se leen de la DB), sí trae `perfilesCount`; `GET /accounts/:id` sí
+      devuelve las credenciales descifradas; filtros por
+      `servicioId`/`proveedorId`/`activo`; crear/editar validan que el
+      servicio/proveedor referenciado exista (404 limpio en vez de un
+      error crudo de FK de Postgres); reactivar
+- [x] CRUD de Perfiles (backend) — `POST` valida que los perfiles activos
+      de la cuenta no superen `pantallasMax` del servicio asociado (sin
+      límite si `pantallasMax` es null); **la misma validación se aplica
+      también al reactivar** un perfil desactivado (no estaba pedido
+      explícitamente, pero reactivar sin este chequeo permitía saltarse el
+      límite — lo agregué por consistencia, revisar si se quiere así)
+- [x] Migración (`AddAccountsAndProfiles`) generada, revisada a mano (solo
+      crea `accounts`/`profiles` y sus FKs hacia `services`/`contacts`, no
+      toca tablas existentes) y corrida contra Postgres local
+- [x] Tests unitarios: cifrado (simétrico, IV aleatorio, clave inválida,
+      auth tag manipulado), `AccountsService` (incluye que el listado
+      nunca selecciona las columnas cifradas), `ProfilesService` (incluye
+      el límite de `pantallasMax` al crear y al reactivar) — 43 tests en
+      total en el repo
+- [x] Probado manualmente contra Postgres local: login, crear cuenta,
+      confirmar que el listado no trae claves y el detalle sí (y que en la
+      tabla `accounts` quedan cifradas en el formato `iv:authTag:data`),
+      crear perfiles hasta `pantallasMax`, confirmar 409 al superarlo,
+      desactivar/reactivar respetando el límite, filtros, 401/404
+- [ ] **Pendiente**: frontend de Cuentas + Perfiles
+- [ ] **Pendiente**: correr la migración contra producción en Railway
+      (junto con configurar `ENCRYPTION_KEY` ahí — lo hacemos juntos)
 
 ## Fase 3 — Ventas
 
