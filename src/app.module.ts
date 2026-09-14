@@ -8,6 +8,7 @@ import { AppService } from './app.service.js';
 import { UsersModule } from './users/users.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { ServicesModule } from './services/services.module.js';
+import { ContactsModule } from './contacts/contacts.module.js';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { ServicesModule } from './services/services.module.js';
     UsersModule,
     AuthModule,
     ServicesModule,
+    ContactsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

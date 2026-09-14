@@ -1,0 +1,5 @@
+export enum ContactType {
+  CLIENTE_FINAL = 'CLIENTE_FINAL',
+  PROVEEDOR = 'PROVEEDOR',
+  REVENDEDOR = 'REVENDEDOR',
+}
