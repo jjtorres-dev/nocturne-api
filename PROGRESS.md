@@ -276,11 +276,57 @@ Si se agrega un DTO de update nuevo en fases futuras, evitar el patrón
       devuelta por el backend, y que las credenciales de Cuentas (Fase 2)
       siguen sin exponerse en ningún punto de este flujo
 
-## Fase 4 — Vencimientos / Alertas
+## Fase 4 — Vencimientos / Alertas — 🚧 en curso (backend completo)
 
-- [ ] Cálculo de vencimientos por venta/perfil
-- [ ] Listado de próximos a vencer / vencidos
-- [ ] Alertas (in-app como mínimo; canal externo se define en Fase 7)
+- [x] `GET /api/sales` extendido con filtros opcionales `vencimiento`
+      (`vencida`/`por_vencer`/`al_dia`) y `diasAlerta` (int, default 3,
+      define el borde entre `por_vencer` y `al_dia`) — se calcula sobre
+      ventas activas según `fechaFin`: `vencida` = `fechaFin < hoy`,
+      `por_vencer` = `fechaFin` entre `hoy` y `hoy + diasAlerta`
+      (ambos bordes inclusive), `al_dia` = `fechaFin > hoy + diasAlerta`.
+      Sigue soportando los filtros `clienteId`/`servicioId` existentes en
+      combinación con `vencimiento`
+- [x] `GET /api/sales/summary` — `{ vencidas, porVencer, alDia }` sobre
+      ventas activas, mismo `diasAlerta` configurable por query param
+      (default 3); pensado para tarjetas del dashboard. Ruta declarada
+      antes que `GET /:id` en el controller (si no, Nest matchea
+      "summary" como el parámetro `:id`)
+- [x] Usa `CURRENT_DATE` de Postgres (vía `QueryBuilder` con SQL crudo
+      para las tres condiciones), no la fecha del cliente que hace el
+      request — evita que el reloj/zona horaria de quien llama afecte
+      qué cuenta como vencido
+- [x] Cuando se pide `vencimiento`, el filtro `activo` que venga en el
+      query se ignora a propósito y se fuerza `activo = true`: los tres
+      estados solo tienen sentido sobre ventas activas
+- [x] Tests unitarios (8 nuevos, 74 en total): las tres condiciones SQL
+      armadas correctamente (bordes, `diasAlerta` default y explícito,
+      combinación con `clienteId`/`servicioId`), que sin `vencimiento`
+      se sigue usando `find()` simple sin `QueryBuilder`, y `summary()`
+      con los tres conteos
+- [x] Tests e2e nuevos (`test/sales-vencimiento.e2e-spec.ts`, requieren
+      Postgres corriendo) — únicos capaces de verificar de verdad la
+      aritmética de `CURRENT_DATE` (un test unitario con repositorio
+      mockeado solo puede confirmar qué SQL se arma, no que el cálculo
+      de fechas sea correcto): los tres estados con fechas calculadas
+      relativas a "hoy" dentro del test (nunca fijas, para no romperse
+      con el paso del tiempo), los bordes inclusive/exclusive, el efecto
+      de un `diasAlerta` explícito corriendo el borde, y el `summary`
+      verificado por delta antes/después de crear una venta (la BD de
+      desarrollo es compartida entre corridas, así que un conteo
+      absoluto sería frágil)
+- [x] Probado manualmente contra el servidor local: ventas con `fechaFin`
+      en el pasado, dentro de la ventana de `diasAlerta` y lejana;
+      cada filtro devolvió exactamente lo esperado y `summary` cuadró
+      con los conteos reales (`{vencidas:2, porVencer:3, alDia:4}` sobre
+      9 ventas creadas a propósito, verificado con la BD limpia antes y
+      después)
+- [ ] **Pendiente**: frontend de Vencimientos/Alertas
+- [ ] **Pendiente**: correr el cambio contra producción en Railway (este
+      no requiere migración: `vencimiento`/`diasAlerta`/`summary` son
+      solo lógica de query, no tocan el schema)
+- [ ] **Pendiente**: Alertas (in-app como mínimo; canal externo se
+      define en Fase 7) — todavía no implementado, solo el cálculo de
+      los tres estados vía `GET /api/sales` y `/summary`
 
 ## Fase 5 — Contabilidad / Caja
 
