@@ -25,6 +25,18 @@ Excel usada previamente para llevar el negocio.
    cp .env.example .env
    ```
 
+   Genera `ENCRYPTION_KEY` (se usa para cifrar en reposo las credenciales
+   de Cuentas/Perfiles con AES-256-GCM) y pegala en `.env`:
+
+   ```bash
+   openssl rand -hex 32
+   ```
+
+   Si esta clave se pierde o se cambia, las credenciales ya guardadas
+   quedan indescifrables — no hay forma de recuperarlas sin la clave
+   original. En producción (Railway) va como variable de entorno del
+   servicio, igual que el resto.
+
 2. Levanta Postgres local con Docker Compose:
 
    ```bash

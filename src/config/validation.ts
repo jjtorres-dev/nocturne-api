@@ -14,6 +14,11 @@ export const validationSchema = Joi.object({
   DB_NAME: Joi.string().required(),
   JWT_SECRET: Joi.string().min(16).required(),
   JWT_EXPIRES_IN: Joi.string().default('1d'),
+  ENCRYPTION_KEY: Joi.string()
+    .hex()
+    .length(64)
+    .required()
+    .description('32 bytes en hex, generar con `openssl rand -hex 32`'),
   ADMIN_EMAIL: Joi.string().email().optional(),
   ADMIN_PASSWORD: Joi.string().min(8).optional(),
 });
