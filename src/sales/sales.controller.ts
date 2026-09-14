@@ -18,6 +18,7 @@ import { SalesService } from './sales.service.js';
 import { CreateSaleDto } from './dto/create-sale.dto.js';
 import { UpdateSaleDto } from './dto/update-sale.dto.js';
 import { QuerySaleDto } from './dto/query-sale.dto.js';
+import { QuerySummaryDto } from './dto/query-summary.dto.js';
 
 @UseGuards(JwtAuthGuard)
 @Controller('sales')
@@ -27,6 +28,13 @@ export class SalesController {
   @Get()
   findAll(@Query() query: QuerySaleDto) {
     return this.salesService.findAll(query);
+  }
+
+  // Tiene que ir antes de `:id`: si no, Nest matchea "summary" como si
+  // fuera el parámetro de esa ruta.
+  @Get('summary')
+  summary(@Query() query: QuerySummaryDto) {
+    return this.salesService.summary(query.diasAlerta);
   }
 
   @Get(':id')

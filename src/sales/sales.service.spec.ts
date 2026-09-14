@@ -3,6 +3,7 @@ import type { Repository } from 'typeorm';
 import { SalesService } from './sales.service.js';
 import { Sale } from './entities/sale.entity.js';
 import { Moneda } from './moneda.enum.js';
+import { VencimientoFiltro } from './vencimiento.enum.js';
 import { ServiceType } from '../services/service-type.enum.js';
 import type { AccountsService } from '../accounts/accounts.service.js';
 import type { ProfilesService } from '../accounts/profiles/profiles.service.js';
@@ -83,6 +84,14 @@ describe('SalesService', () => {
     findOne: ReturnType<typeof vi.fn>;
     find: ReturnType<typeof vi.fn>;
     query: ReturnType<typeof vi.fn>;
+    createQueryBuilder: ReturnType<typeof vi.fn>;
+  };
+  let queryBuilder: {
+    where: ReturnType<typeof vi.fn>;
+    andWhere: ReturnType<typeof vi.fn>;
+    orderBy: ReturnType<typeof vi.fn>;
+    getMany: ReturnType<typeof vi.fn>;
+    getCount: ReturnType<typeof vi.fn>;
   };
   let accountsService: {
     findOne: ReturnType<typeof vi.fn>;
@@ -97,6 +106,13 @@ describe('SalesService', () => {
   let salesService: SalesService;
 
   beforeEach(() => {
+    queryBuilder = {
+      where: vi.fn().mockReturnThis(),
+      andWhere: vi.fn().mockReturnThis(),
+      orderBy: vi.fn().mockReturnThis(),
+      getMany: vi.fn().mockResolvedValue([]),
+      getCount: vi.fn().mockResolvedValue(0),
+    };
     salesRepo = {
       create: vi.fn((dto) => ({ ...dto })),
       save: vi.fn(async (entity) => entity),
@@ -104,6 +120,7 @@ describe('SalesService', () => {
       findOne: vi.fn(),
       find: vi.fn(),
       query: vi.fn().mockResolvedValue([{ nextval: '1' }]),
+      createQueryBuilder: vi.fn(() => queryBuilder),
     };
     accountsService = {
       findOne: vi.fn().mockResolvedValue(cuenta),
@@ -355,6 +372,112 @@ describe('SalesService', () => {
 
       const payload = salesRepo.update.mock.calls[0][1];
       expect(payload).not.toHaveProperty('precioPEN');
+    });
+  });
+
+  describe('findAll con vencimiento', () => {
+    it('sin vencimiento sigue usando find() simple (no QueryBuilder)', async () => {
+      salesRepo.find.mockResolvedValue([]);
+
+      await salesService.findAll({});
+
+      expect(salesRepo.find).toHaveBeenCalled();
+      expect(salesRepo.createQueryBuilder).not.toHaveBeenCalled();
+    });
+
+    it('vencida: filtra activo=true y fechaFin < CURRENT_DATE', async () => {
+      await salesService.findAll({ vencimiento: VencimientoFiltro.VENCIDA });
+
+      expect(queryBuilder.where).toHaveBeenCalledWith('sale.activo = :activo', {
+        activo: true,
+      });
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        'sale.fechaFin < CURRENT_DATE',
+      );
+    });
+
+    it('por_vencer: usa diasAlerta=3 por defecto', async () => {
+      await salesService.findAll({
+        vencimiento: VencimientoFiltro.POR_VENCER,
+      });
+
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        "sale.fechaFin BETWEEN CURRENT_DATE AND CURRENT_DATE + (:dias * INTERVAL '1 day')",
+        { dias: 3 },
+      );
+    });
+
+    it('al_dia: respeta un diasAlerta explícito', async () => {
+      await salesService.findAll({
+        vencimiento: VencimientoFiltro.AL_DIA,
+        diasAlerta: 7,
+      });
+
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        "sale.fechaFin > CURRENT_DATE + (:dias * INTERVAL '1 day')",
+        { dias: 7 },
+      );
+    });
+
+    it('combina vencimiento con clienteId y servicioId', async () => {
+      await salesService.findAll({
+        vencimiento: VencimientoFiltro.VENCIDA,
+        clienteId: 'contact-1',
+        servicioId: 'service-1',
+      });
+
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        'sale.clienteId = :clienteId',
+        { clienteId: 'contact-1' },
+      );
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        'sale.servicioId = :servicioId',
+        { servicioId: 'service-1' },
+      );
+    });
+
+    it('ignora query.activo a propósito: siempre fuerza activo=true', async () => {
+      await salesService.findAll({
+        vencimiento: VencimientoFiltro.VENCIDA,
+        activo: false,
+      });
+
+      expect(queryBuilder.where).toHaveBeenCalledWith('sale.activo = :activo', {
+        activo: true,
+      });
+    });
+  });
+
+  describe('summary', () => {
+    it('cuenta vencidas, por vencer y al día con el mismo diasAlerta', async () => {
+      queryBuilder.getCount
+        .mockResolvedValueOnce(2)
+        .mockResolvedValueOnce(5)
+        .mockResolvedValueOnce(9);
+
+      const result = await salesService.summary(5);
+
+      expect(result).toEqual({ vencidas: 2, porVencer: 5, alDia: 9 });
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        'sale.fechaFin < CURRENT_DATE',
+      );
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        "sale.fechaFin BETWEEN CURRENT_DATE AND CURRENT_DATE + (:dias * INTERVAL '1 day')",
+        { dias: 5 },
+      );
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        "sale.fechaFin > CURRENT_DATE + (:dias * INTERVAL '1 day')",
+        { dias: 5 },
+      );
+    });
+
+    it('usa diasAlerta=3 por defecto', async () => {
+      await salesService.summary();
+
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        expect.stringContaining('BETWEEN'),
+        { dias: 3 },
+      );
     });
   });
 });

@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
+import { IsNull, Repository, SelectQueryBuilder } from 'typeorm';
 import { Sale } from './entities/sale.entity.js';
 import { CreateSaleDto } from './dto/create-sale.dto.js';
 import { UpdateSaleDto } from './dto/update-sale.dto.js';
@@ -16,8 +16,11 @@ import { ServicesService } from '../services/services.service.js';
 import { ContactsService } from '../contacts/contacts.service.js';
 import { ServiceType } from '../services/service-type.enum.js';
 import { addMonthsToDate } from './date.util.js';
+import { VencimientoFiltro } from './vencimiento.enum.js';
+import type { SalesSummary } from './sales-summary.js';
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
+const DIAS_ALERTA_DEFAULT = 3;
 
 @Injectable()
 export class SalesService {
@@ -84,6 +87,9 @@ export class SalesService {
   }
 
   findAll(query: QuerySaleDto): Promise<Sale[]> {
+    if (query.vencimiento) {
+      return this.findAllByVencimiento(query);
+    }
     const where: Partial<Pick<Sale, 'clienteId' | 'servicioId' | 'activo'>> =
       {};
     if (query.clienteId) {
@@ -96,6 +102,77 @@ export class SalesService {
       where.activo = query.activo;
     }
     return this.salesRepository.find({ where, order: { createdAt: 'DESC' } });
+  }
+
+  async summary(diasAlerta = DIAS_ALERTA_DEFAULT): Promise<SalesSummary> {
+    const [vencidas, porVencer, alDia] = await Promise.all([
+      this.countByVencimiento(VencimientoFiltro.VENCIDA, diasAlerta),
+      this.countByVencimiento(VencimientoFiltro.POR_VENCER, diasAlerta),
+      this.countByVencimiento(VencimientoFiltro.AL_DIA, diasAlerta),
+    ]);
+    return { vencidas, porVencer, alDia };
+  }
+
+  // vencimiento se calcula siempre sobre ventas activas (ver PROGRESS.md);
+  // por eso acá se ignora a propósito query.activo en vez de combinarlo.
+  private findAllByVencimiento(query: QuerySaleDto): Promise<Sale[]> {
+    const diasAlerta = query.diasAlerta ?? DIAS_ALERTA_DEFAULT;
+    const qb = this.salesRepository
+      .createQueryBuilder('sale')
+      .where('sale.activo = :activo', { activo: true });
+
+    if (query.clienteId) {
+      qb.andWhere('sale.clienteId = :clienteId', {
+        clienteId: query.clienteId,
+      });
+    }
+    if (query.servicioId) {
+      qb.andWhere('sale.servicioId = :servicioId', {
+        servicioId: query.servicioId,
+      });
+    }
+
+    this.applyVencimientoCondition(qb, query.vencimiento!, diasAlerta);
+
+    return qb.orderBy('sale.createdAt', 'DESC').getMany();
+  }
+
+  private countByVencimiento(
+    vencimiento: VencimientoFiltro,
+    diasAlerta: number,
+  ): Promise<number> {
+    const qb = this.salesRepository
+      .createQueryBuilder('sale')
+      .where('sale.activo = :activo', { activo: true });
+    this.applyVencimientoCondition(qb, vencimiento, diasAlerta);
+    return qb.getCount();
+  }
+
+  // CURRENT_DATE es la fecha del servidor de Postgres, no la del cliente
+  // que hace el request: evita que el reloj/zona horaria de quien llama
+  // afecte qué ventas cuentan como vencidas.
+  private applyVencimientoCondition(
+    qb: SelectQueryBuilder<Sale>,
+    vencimiento: VencimientoFiltro,
+    diasAlerta: number,
+  ): void {
+    switch (vencimiento) {
+      case VencimientoFiltro.VENCIDA:
+        qb.andWhere('sale.fechaFin < CURRENT_DATE');
+        break;
+      case VencimientoFiltro.POR_VENCER:
+        qb.andWhere(
+          "sale.fechaFin BETWEEN CURRENT_DATE AND CURRENT_DATE + (:dias * INTERVAL '1 day')",
+          { dias: diasAlerta },
+        );
+        break;
+      case VencimientoFiltro.AL_DIA:
+        qb.andWhere(
+          "sale.fechaFin > CURRENT_DATE + (:dias * INTERVAL '1 day')",
+          { dias: diasAlerta },
+        );
+        break;
+    }
   }
 
   async findOne(id: string): Promise<Sale> {
