@@ -167,7 +167,7 @@ Si se agrega un DTO de update nuevo en fases futuras, evitar el patrón
       consola/logs, límite de pantallas validado tanto al crear como al
       reactivar un perfil (409 limpio, manejado en la UI sin romper)
 
-## Fase 3 — Ventas — 🚧 en curso (backend completo)
+## Fase 3 — Ventas — ✅ completa (2026-09-14)
 
 - [x] Migración: columna `cliente_id` (FK a `contacts`, nullable) agregada a
       `accounts` — mismo propósito que ya tiene `profiles.clienteId`, para
@@ -220,11 +220,14 @@ Si se agrega un DTO de update nuevo en fases futuras, evitar el patrón
       creación y en `update`), generación de `codigoVenta`, y el endpoint
       de renovación (incluye la aritmética de meses fraccionarios en
       `date.util.spec.ts`)
-- [x] Migración (`AddSalesAndAccountCliente`) generada con
-      `migration:generate` y revisada a mano — se le agregó a mano la
-      secuencia `sales_codigo_venta_seq` (TypeORM no la genera desde la
-      entidad; la usa directamente `SalesService.generateCodigoVenta()`
-      con `nextval()`); corrida contra Postgres local
+- [x] Migración generada con `migration:generate` y revisada a mano — se le
+      agregó a mano la secuencia `sales_codigo_venta_seq` (TypeORM no la
+      genera desde la entidad; la usa directamente
+      `SalesService.generateCodigoVenta()` con `nextval()`). Se separó en
+      dos migraciones (`AddClienteIdToAccounts` + `AddSales`) para poder
+      comitear el cambio de schema de Cuentas aparte del módulo de Ventas
+      — el split no rompe nada porque `accounts.cliente_id` no tiene
+      dependencia cruzada con `sales`; corridas contra Postgres local
 - [x] Probado manualmente contra el servidor local: crear venta de perfil
       → confirmar `clienteId` sincronizado en el perfil → volver a vender
       el mismo perfil (409) → desactivar → confirmar que se liberó
@@ -232,8 +235,46 @@ Si se agrega un DTO de update nuevo en fases futuras, evitar el patrón
       la venta original (409, indica qué venta lo ocupa ahora) → venta
       directa sobre cuenta SIN_PERFILES con conversión de moneda
       (`precioPEN` correcto) → renovar y confirmar la nueva `fechaFin`
-- [ ] **Pendiente**: frontend de Ventas
-- [ ] **Pendiente**: correr la migración contra producción en Railway
+- [x] Migración corrida contra producción en Railway
+- [x] Frontend de Ventas (`/sales`) — listado (`mat-table`) con código de
+      venta, cliente, servicio, cuenta (correo) + perfil combinados,
+      fechas, precio con moneda, estado; filtros por cliente/servicio/
+      activo; acciones editar/renovar/desactivar/reactivar por fila
+- [x] Frontend de Ventas — modal de creación con selects en cascada:
+      Servicio (activos) → Cuenta (activas de ese servicio) → si
+      CON_PERFILES/FAMILIAR, Perfil (activos y sin `clienteId`, es decir
+      libres); si SIN_PERFILES/IPTV, sin selector de perfil y valida en
+      el propio formulario que la cuenta no tenga ya `clienteId`
+      asignado antes de llamar al backend; si el backend igual responde
+      409 (carrera con otra venta), muestra el mensaje de error del
+      backend en vez de uno genérico
+- [x] Frontend de Ventas — modal de edición reducido a propósito:
+      `fechaFin`/`precio`/`moneda`/`tasaCambio`/`metodoPago`/
+      `renovacionAutomatica` únicamente, sin campos ni controles para
+      `servicioId`/`cuentaId`/`perfilId`/`clienteId` en el DOM
+      (reasignar exige desactivar + crear una venta nueva, ver
+      `UpdateVentaPayload`)
+- [x] Frontend de Ventas — botón "Renovar" con confirmación simple; la
+      nueva `fechaFin` que se muestra en el snackbar de éxito viene tal
+      cual de la respuesta del backend, el frontend no la calcula
+- [x] Cambio necesario en Cuentas (Fase 2) para soportar esto: se agregó
+      `clienteId` a `Cuenta`/`CuentaListItem` en el frontend, reflejando
+      la columna que el backend ya devuelve desde el punto anterior —
+      el modal de creación de venta lo necesita para la validación de
+      cuentas SIN_PERFILES/IPTV ya asignadas
+- [x] Tests de componente (25 nuevos, 81 en total en el repo): listado
+      (incluye la combinación cuenta+perfil en la tabla), la cascada del
+      form de creación (que Cuenta/Perfil se filtran correctamente al
+      cambiar Servicio, y que los perfiles ocupados no aparecen como
+      opción), y que el modal de editar no expone los campos
+      estructurales ni en el `FormGroup` ni en el DOM
+- [x] **Verificado end-to-end** contra el servidor local: exclusividad de
+      asignación (perfil/cuenta ocupados → 409 visible en el modal),
+      liberación al desactivar y bloqueo al reactivar si alguien más lo
+      ocupó mientras tanto, conversión de moneda (`precioPEN` correcto
+      con `tasaCambio` distinto de 1), renovación con la `fechaFin` real
+      devuelta por el backend, y que las credenciales de Cuentas (Fase 2)
+      siguen sin exponerse en ningún punto de este flujo
 
 ## Fase 4 — Vencimientos / Alertas
 
