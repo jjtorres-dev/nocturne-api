@@ -8,6 +8,8 @@ import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, IsNull, Repository } from 'typeorm';
 import { VentaCombo } from './entities/venta-combo.entity.js';
 import { CreateComboSaleDto } from './dto/create-combo-sale.dto.js';
+import { UpdateComboSaleDto } from './dto/update-combo-sale.dto.js';
+import { QueryComboSaleDto } from './dto/query-combo-sale.dto.js';
 import type { ComboSaleAsignacionDto } from './dto/combo-sale-asignacion.dto.js';
 import { ContactsService } from '../contacts/contacts.service.js';
 import { CombosService } from '../combos/combos.service.js';
@@ -20,6 +22,7 @@ import { ServiceType } from '../services/service-type.enum.js';
 import { Payment } from '../payments/entities/payment.entity.js';
 import { PaymentType } from '../payments/payment-type.enum.js';
 import { generateCodigoVenta } from '../sales/codigo-venta.util.js';
+import { addMonthsToDate, todayIso } from '../sales/date.util.js';
 import { round2 } from '../common/round2.js';
 
 interface AsignacionValidada {
@@ -134,12 +137,133 @@ export class ComboSalesService {
     return this.findOne(ventaComboId);
   }
 
+  findAll(query: QueryComboSaleDto): Promise<VentaCombo[]> {
+    const where: Partial<Pick<VentaCombo, 'clienteId' | 'comboId' | 'activo'>> =
+      {};
+    if (query.clienteId) {
+      where.clienteId = query.clienteId;
+    }
+    if (query.comboId) {
+      where.comboId = query.comboId;
+    }
+    if (query.activo !== undefined) {
+      where.activo = query.activo;
+    }
+    return this.ventaCombosRepository.find({
+      where,
+      order: { createdAt: 'DESC' },
+    });
+  }
+
   async findOne(id: string): Promise<VentaCombo> {
     const ventaCombo = await this.ventaCombosRepository.findOne({
       where: { id },
       relations: {
         ventas: { servicio: true, cuenta: true, perfil: true },
       },
+    });
+    if (!ventaCombo) {
+      throw new NotFoundException(`VentaCombo ${id} no encontrada`);
+    }
+    return ventaCombo;
+  }
+
+  async update(id: string, dto: UpdateComboSaleDto): Promise<VentaCombo> {
+    const ventaCombo = await this.findEntity(id);
+    // Ver nota en ServicesService.update: nunca Object.assign(entity, dto).
+    const updatePayload: Partial<VentaCombo> = { ...dto };
+    if (dto.precio !== undefined || dto.tasaCambio !== undefined) {
+      const precio = dto.precio ?? ventaCombo.precio;
+      const tasaCambio = dto.tasaCambio ?? ventaCombo.tasaCambio;
+      updatePayload.precioPEN = round2(precio * tasaCambio);
+    }
+    await this.ventaCombosRepository.update(id, updatePayload);
+    return this.findOne(id);
+  }
+
+  async softDelete(id: string): Promise<VentaCombo> {
+    await this.dataSource.transaction(async (manager) => {
+      const ventaCombo = await manager.findOne(VentaCombo, { where: { id } });
+      if (!ventaCombo) {
+        throw new NotFoundException(`VentaCombo ${id} no encontrada`);
+      }
+      const ventas = await manager.find(Sale, { where: { ventaComboId: id } });
+      for (const venta of ventas) {
+        await manager.update(Sale, venta.id, { activo: false });
+        await this.liberarAsignacion(manager, venta);
+      }
+      await manager.update(VentaCombo, id, { activo: false });
+    });
+    return this.findOne(id);
+  }
+
+  async reactivate(id: string): Promise<VentaCombo> {
+    await this.dataSource.transaction(async (manager) => {
+      const ventaCombo = await manager.findOne(VentaCombo, { where: { id } });
+      if (!ventaCombo) {
+        throw new NotFoundException(`VentaCombo ${id} no encontrada`);
+      }
+      const ventas = await manager.find(Sale, { where: { ventaComboId: id } });
+
+      // Fase 1: revalidar exclusividad de TODAS las ventas hijas antes de
+      // reactivar ninguna.
+      for (const venta of ventas) {
+        await this.assertAsignacionSigueLibre(manager, venta);
+      }
+
+      // Fase 2: reactivar y resincronizar clienteId.
+      for (const venta of ventas) {
+        await manager.update(Sale, venta.id, { activo: true });
+        if (venta.perfilId) {
+          await manager.update(
+            Profile,
+            { id: venta.perfilId, cuentaId: venta.cuentaId },
+            { clienteId: venta.clienteId },
+          );
+        } else {
+          await manager.update(Account, venta.cuentaId, {
+            clienteId: venta.clienteId,
+          });
+        }
+      }
+      await manager.update(VentaCombo, id, { activo: true });
+    });
+    return this.findOne(id);
+  }
+
+  async renew(id: string): Promise<VentaCombo> {
+    await this.dataSource.transaction(async (manager) => {
+      const ventaCombo = await manager.findOne(VentaCombo, { where: { id } });
+      if (!ventaCombo) {
+        throw new NotFoundException(`VentaCombo ${id} no encontrada`);
+      }
+      const fechaFin = addMonthsToDate(
+        ventaCombo.fechaFin,
+        ventaCombo.duracionMeses,
+      );
+
+      await manager.update(VentaCombo, id, { fechaFin });
+      await manager.update(Sale, { ventaComboId: id }, { fechaFin });
+
+      const payment = manager.create(Payment, {
+        ventaId: null,
+        ventaComboId: id,
+        monto: ventaCombo.precio,
+        moneda: ventaCombo.moneda,
+        tasaCambio: ventaCombo.tasaCambio,
+        montoPEN: round2(ventaCombo.precio * ventaCombo.tasaCambio),
+        metodoPago: ventaCombo.metodoPago,
+        fecha: todayIso(),
+        tipo: PaymentType.RENOVACION,
+      });
+      await manager.save(payment);
+    });
+    return this.findOne(id);
+  }
+
+  private async findEntity(id: string): Promise<VentaCombo> {
+    const ventaCombo = await this.ventaCombosRepository.findOne({
+      where: { id },
     });
     if (!ventaCombo) {
       throw new NotFoundException(`VentaCombo ${id} no encontrada`);
@@ -243,6 +367,46 @@ export class ComboSalesService {
     }
 
     return { asignacion, servicio, perfilId };
+  }
+
+  private async assertAsignacionSigueLibre(
+    manager: EntityManager,
+    venta: Sale,
+  ): Promise<void> {
+    if (venta.perfilId) {
+      const ocupado = await manager.findOne(Sale, {
+        where: { perfilId: venta.perfilId, activo: true },
+      });
+      if (ocupado) {
+        throw new ConflictException(
+          `El perfil de la venta ${venta.codigoVenta} ya no está libre (ocupado por ${ocupado.codigoVenta}).`,
+        );
+      }
+    } else {
+      const ocupado = await manager.findOne(Sale, {
+        where: { cuentaId: venta.cuentaId, perfilId: IsNull(), activo: true },
+      });
+      if (ocupado) {
+        throw new ConflictException(
+          `La cuenta de la venta ${venta.codigoVenta} ya no está libre (ocupada por ${ocupado.codigoVenta}).`,
+        );
+      }
+    }
+  }
+
+  private async liberarAsignacion(
+    manager: EntityManager,
+    venta: Sale,
+  ): Promise<void> {
+    if (venta.perfilId) {
+      await manager.update(
+        Profile,
+        { id: venta.perfilId, cuentaId: venta.cuentaId },
+        { clienteId: null },
+      );
+    } else {
+      await manager.update(Account, venta.cuentaId, { clienteId: null });
+    }
   }
 
   private async generateCodigoVentaCombo(

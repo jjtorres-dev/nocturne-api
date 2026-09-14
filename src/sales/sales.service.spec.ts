@@ -309,9 +309,34 @@ describe('SalesService', () => {
       );
       expect(profilesService.assignCliente).not.toHaveBeenCalled();
     });
+
+    it('rechaza desactivar directo una venta hija de un combo', async () => {
+      salesRepo.findOne.mockResolvedValue({
+        ...baseSale,
+        ventaComboId: 'combo-venta-1',
+      });
+
+      await expect(salesService.softDelete('sale-1')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(salesRepo.save).not.toHaveBeenCalled();
+    });
   });
 
   describe('reactivate', () => {
+    it('rechaza reactivar directo una venta hija de un combo', async () => {
+      salesRepo.findOne.mockResolvedValue({
+        ...baseSale,
+        activo: false,
+        ventaComboId: 'combo-venta-1',
+      });
+
+      await expect(salesService.reactivate('sale-1')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(salesRepo.save).not.toHaveBeenCalled();
+    });
+
     it('reasigna el perfil si sigue libre', async () => {
       salesRepo.findOne
         .mockResolvedValueOnce({ ...baseSale, activo: false }) // findOne(id)
@@ -362,6 +387,18 @@ describe('SalesService', () => {
 
     afterEach(() => {
       vi.useRealTimers();
+    });
+
+    it('rechaza renovar directo una venta hija de un combo', async () => {
+      salesRepo.findOne.mockResolvedValue({
+        ...baseSale,
+        ventaComboId: 'combo-venta-1',
+      });
+
+      await expect(salesService.renew('sale-1')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(salesRepo.update).not.toHaveBeenCalled();
     });
 
     it('extiende fechaFin sumando duracionMeses (snapshot de la venta)', async () => {

@@ -213,6 +213,7 @@ export class SalesService {
 
   async softDelete(id: string): Promise<Sale> {
     const sale = await this.findOne(id);
+    this.assertNoPerteneceAUnCombo(sale);
     sale.activo = false;
     const saved = await this.salesRepository.save(sale);
     await this.liberar(sale);
@@ -221,6 +222,7 @@ export class SalesService {
 
   async reactivate(id: string): Promise<Sale> {
     const sale = await this.findOne(id);
+    this.assertNoPerteneceAUnCombo(sale);
     if (sale.perfilId) {
       await this.assertPerfilLibre(sale.perfilId);
     } else {
@@ -234,6 +236,7 @@ export class SalesService {
 
   async renew(id: string, dto: RenewSaleDto = {}): Promise<Sale> {
     const sale = await this.findOne(id);
+    this.assertNoPerteneceAUnCombo(sale);
     const fechaFin = addMonthsToDate(sale.fechaFin, sale.duracionMeses);
     const precio = dto.precio ?? sale.precio;
     const moneda = dto.moneda ?? sale.moneda;
@@ -311,4 +314,11 @@ export class SalesService {
     }
   }
 
+  private assertNoPerteneceAUnCombo(sale: Sale): void {
+    if (sale.ventaComboId) {
+      throw new BadRequestException(
+        `La venta ${sale.codigoVenta} pertenece al combo (ventaComboId=${sale.ventaComboId}); se gestiona desde /api/combo-sales, no directamente.`,
+      );
+    }
+  }
 }

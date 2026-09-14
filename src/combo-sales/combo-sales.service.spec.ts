@@ -106,8 +106,8 @@ describe('ComboSalesService', () => {
     };
     contactsService = { findOne: vi.fn().mockResolvedValue({ id: 'cli-1' }) };
     combosService = { findOne: vi.fn().mockResolvedValue(combo) };
-    // Default para el findOne() final que hace create() después de la
-    // transacción (usa el repositorio, no el manager).
+    // Default para el findOne() final que hacen create/softDelete/reactivate/
+    // renew después de la transacción (usa el repositorio, no el manager).
     ventaCombosRepo.findOne.mockResolvedValue({ id: 'venta-combo-1', ventas: [] });
 
     comboSalesService = new ComboSalesService(
@@ -317,6 +317,154 @@ describe('ComboSalesService', () => {
       // de VentaCombo, Sale hija o Payment quedó creado.
       expect(manager.save).not.toHaveBeenCalled();
       expect(manager.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('findOne / findAll', () => {
+    it('findOne carga las ventas hijas con servicio/cuenta/perfil', async () => {
+      ventaCombosRepo.findOne.mockResolvedValue({ id: 'venta-combo-1' });
+
+      await comboSalesService.findOne('venta-combo-1');
+
+      expect(ventaCombosRepo.findOne).toHaveBeenCalledWith({
+        where: { id: 'venta-combo-1' },
+        relations: { ventas: { servicio: true, cuenta: true, perfil: true } },
+      });
+    });
+
+    it('findAll filtra por clienteId/comboId/activo', async () => {
+      ventaCombosRepo.find.mockResolvedValue([]);
+
+      await comboSalesService.findAll({
+        clienteId: 'cli-1',
+        comboId: 'combo-1',
+        activo: true,
+      });
+
+      expect(ventaCombosRepo.find).toHaveBeenCalledWith({
+        where: { clienteId: 'cli-1', comboId: 'combo-1', activo: true },
+        order: { createdAt: 'DESC' },
+      });
+    });
+  });
+
+  describe('update', () => {
+    it('recalcula precioPEN si cambia precio o tasaCambio', async () => {
+      ventaCombosRepo.findOne
+        .mockResolvedValueOnce({ id: 'venta-combo-1', precio: 30, tasaCambio: 1 })
+        .mockResolvedValueOnce({ id: 'venta-combo-1' });
+
+      await comboSalesService.update('venta-combo-1', { tasaCambio: 2 });
+
+      expect(ventaCombosRepo.update).toHaveBeenCalledWith(
+        'venta-combo-1',
+        expect.objectContaining({ tasaCambio: 2, precioPEN: 60 }),
+      );
+    });
+  });
+
+  describe('softDelete', () => {
+    it('desactiva el wrapper, todas las ventas hijas, y libera sus cuentas/perfiles', async () => {
+      manager.findOne.mockResolvedValueOnce({ id: 'venta-combo-1' });
+      manager.find.mockResolvedValueOnce([
+        { id: 'sale-a', cuentaId: 'cta-a', perfilId: null },
+        { id: 'sale-b', cuentaId: 'cta-b', perfilId: 'per-b' },
+      ]);
+
+      await comboSalesService.softDelete('venta-combo-1');
+
+      expect(manager.update).toHaveBeenCalledWith(expect.anything(), 'sale-a', {
+        activo: false,
+      });
+      expect(manager.update).toHaveBeenCalledWith(expect.anything(), 'cta-a', {
+        clienteId: null,
+      });
+      expect(manager.update).toHaveBeenCalledWith(
+        expect.anything(),
+        { id: 'per-b', cuentaId: 'cta-b' },
+        { clienteId: null },
+      );
+      expect(manager.update).toHaveBeenCalledWith(
+        expect.anything(),
+        'venta-combo-1',
+        { activo: false },
+      );
+    });
+  });
+
+  describe('reactivate', () => {
+    it('revalida exclusividad de TODAS las hijas antes de reactivar cualquiera', async () => {
+      manager.findOne.mockResolvedValueOnce({ id: 'venta-combo-1' });
+      manager.find.mockResolvedValueOnce([
+        { id: 'sale-a', cuentaId: 'cta-a', perfilId: null, codigoVenta: 'V-1' },
+        { id: 'sale-b', cuentaId: 'cta-b', perfilId: 'per-b', codigoVenta: 'V-2' },
+      ]);
+      // sale-a: libre; sale-b: perfil ya ocupado por otra venta.
+      manager.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'sale-z', codigoVenta: 'V-99' });
+
+      await expect(comboSalesService.reactivate('venta-combo-1')).rejects.toThrow(
+        ConflictException,
+      );
+      // Ninguna de las dos debe haberse reactivado.
+      expect(manager.update).not.toHaveBeenCalled();
+    });
+
+    it('reactiva y resincroniza clienteId cuando todo sigue libre', async () => {
+      manager.findOne.mockResolvedValueOnce({ id: 'venta-combo-1' });
+      manager.find.mockResolvedValueOnce([
+        { id: 'sale-a', cuentaId: 'cta-a', perfilId: null, clienteId: 'cli-1' },
+      ]);
+      manager.findOne.mockResolvedValueOnce(null); // libre
+
+      await comboSalesService.reactivate('venta-combo-1');
+
+      expect(manager.update).toHaveBeenCalledWith(expect.anything(), 'sale-a', {
+        activo: true,
+      });
+      expect(manager.update).toHaveBeenCalledWith(expect.anything(), 'cta-a', {
+        clienteId: 'cli-1',
+      });
+      expect(manager.update).toHaveBeenCalledWith(
+        expect.anything(),
+        'venta-combo-1',
+        { activo: true },
+      );
+    });
+  });
+
+  describe('renew', () => {
+    it('extiende fechaFin del wrapper y de todas las hijas, y crea un Payment de renovación', async () => {
+      manager.findOne.mockResolvedValueOnce({
+        id: 'venta-combo-1',
+        fechaFin: '2026-02-05',
+        duracionMeses: 1,
+        precio: 30,
+        moneda: Moneda.PEN,
+        tasaCambio: 1,
+        precioPEN: 30,
+        metodoPago: 'Yape',
+      });
+
+      await comboSalesService.renew('venta-combo-1');
+
+      expect(manager.update).toHaveBeenCalledWith(expect.anything(), 'venta-combo-1', {
+        fechaFin: '2026-03-05',
+      });
+      expect(manager.update).toHaveBeenCalledWith(
+        expect.anything(),
+        { ventaComboId: 'venta-combo-1' },
+        { fechaFin: '2026-03-05' },
+      );
+      expect(manager.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ventaId: null,
+          ventaComboId: 'venta-combo-1',
+          monto: 30,
+          tipo: PaymentType.RENOVACION,
+        }),
+      );
     });
   });
 });
