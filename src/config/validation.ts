@@ -1,4 +1,6 @@
-import * as Joi from 'joi';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const Joi = require('joi');
 
 export const validationSchema = Joi.object({
   NODE_ENV: Joi.string()
