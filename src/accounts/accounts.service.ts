@@ -9,6 +9,12 @@ import { QueryAccountDto } from './dto/query-account.dto.js';
 import type { AccountListItem } from './account-list-item.js';
 import { ServicesService } from '../services/services.service.js';
 import { ContactsService } from '../contacts/contacts.service.js';
+import { round2 } from '../common/round2.js';
+
+export interface ServicioInversion {
+  servicioId: string;
+  inversion: number;
+}
 
 const LIST_SELECT = {
   id: true,
@@ -124,6 +130,42 @@ export class AccountsService {
   // asignado a una cuenta vendida completa (servicios SIN_PERFILES/IPTV).
   async assignCliente(id: string, clienteId: string | null): Promise<void> {
     await this.accountsRepository.update(id, { clienteId });
+  }
+
+  // "inversion" en Fase 5 (Contabilidad): la fecha relevante es cuándo se
+  // compró la cuenta (createdAt), no fechaInicio/fechaFin del período de
+  // uso. Incluye cuentas desactivadas a propósito: el costo ya se pagó
+  // aunque la cuenta luego se haya dado de baja.
+  async sumCosto(desde: string, hasta: string): Promise<number> {
+    const result = await this.accountsRepository
+      .createQueryBuilder('account')
+      .select('COALESCE(SUM(account.costo), 0)', 'total')
+      .where('CAST(account.createdAt AS date) BETWEEN :desde AND :hasta', {
+        desde,
+        hasta,
+      })
+      .getRawOne<{ total: string }>();
+    return round2(parseFloat(result?.total ?? '0'));
+  }
+
+  async sumCostoByServicio(
+    desde: string,
+    hasta: string,
+  ): Promise<ServicioInversion[]> {
+    const rows = await this.accountsRepository
+      .createQueryBuilder('account')
+      .select('account.servicioId', 'servicioId')
+      .addSelect('SUM(account.costo)', 'inversion')
+      .where('CAST(account.createdAt AS date) BETWEEN :desde AND :hasta', {
+        desde,
+        hasta,
+      })
+      .groupBy('account.servicioId')
+      .getRawMany<{ servicioId: string; inversion: string }>();
+    return rows.map((row) => ({
+      servicioId: row.servicioId,
+      inversion: round2(parseFloat(row.inversion)),
+    }));
   }
 
   private async assertReferencesExist(

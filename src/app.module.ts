@@ -14,6 +14,7 @@ import { ProfilesModule } from './accounts/profiles/profiles.module.js';
 import { SalesModule } from './sales/sales.module.js';
 import { PaymentsModule } from './payments/payments.module.js';
 import { ExpensesModule } from './expenses/expenses.module.js';
+import { AccountingModule } from './accounting/accounting.module.js';
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { ExpensesModule } from './expenses/expenses.module.js';
     SalesModule,
     PaymentsModule,
     ExpensesModule,
+    AccountingModule,
   ],
   controllers: [AppController],
   providers: [AppService],
