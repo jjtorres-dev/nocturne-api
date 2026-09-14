@@ -13,6 +13,7 @@ import { AccountsModule } from './accounts/accounts.module.js';
 import { ProfilesModule } from './accounts/profiles/profiles.module.js';
 import { SalesModule } from './sales/sales.module.js';
 import { PaymentsModule } from './payments/payments.module.js';
+import { ExpensesModule } from './expenses/expenses.module.js';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { PaymentsModule } from './payments/payments.module.js';
     ProfilesModule,
     SalesModule,
     PaymentsModule,
+    ExpensesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
