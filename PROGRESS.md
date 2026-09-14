@@ -90,7 +90,7 @@ test de regresión en `services.service.spec.ts` / `contacts.service.spec.ts`.
 Si se agrega un DTO de update nuevo en fases futuras, evitar el patrón
 `Object.assign(entity, dto)`.
 
-## Fase 2 — Cuentas + Perfiles — 🚧 en curso (backend completo)
+## Fase 2 — Cuentas + Perfiles — ✅ completa (2026-09-14)
 
 - [x] Cifrado AES-256-GCM (`src/common/encryption/`) — `encrypt`/`decrypt`
       con Node `crypto` nativo, clave en `ENCRYPTION_KEY` (32 bytes hex,
@@ -131,9 +131,41 @@ Si se agrega un DTO de update nuevo en fases futuras, evitar el patrón
       tabla `accounts` quedan cifradas en el formato `iv:authTag:data`),
       crear perfiles hasta `pantallasMax`, confirmar 409 al superarlo,
       desactivar/reactivar respetando el límite, filtros, 401/404
-- [ ] **Pendiente**: frontend de Cuentas + Perfiles
-- [ ] **Pendiente**: correr la migración contra producción en Railway
-      (junto con configurar `ENCRYPTION_KEY` ahí — lo hacemos juntos)
+- [x] Migración corrida contra producción en Railway y `ENCRYPTION_KEY`
+      configurada ahí
+- [x] Frontend de Cuentas (`/accounts`) — listado (`mat-table`) sin
+      credenciales visibles, con columna de cantidad de perfiles
+      (`activos/pantallasMax`, ej. "2/5") y filtros por servicio,
+      proveedor y estado; click en fila navega al detalle
+- [x] Frontend de Cuentas — formulario en modal (crear/editar) con selects
+      de Servicio y Proveedor (Contactos `tipo=PROVEEDOR`), ambos filtrados
+      a solo activos; `claveServicio`/`claveCorreo` como campos tipo
+      password con toggle de mostrar/ocultar; valida que `fechaFin` sea
+      posterior a `fechaInicio`
+- [x] Frontend de detalle de Cuenta (`/accounts/:id`) — toda la info de la
+      cuenta, con `claveServicio`/`claveCorreo` ocultas por defecto (botón
+      "Mostrar" por campo) y botón "Copiar" que usa
+      `navigator.clipboard.writeText` sin revelar en pantalla; acciones de
+      editar/desactivar/reactivar la cuenta
+- [x] Frontend de Perfiles anidados en el detalle de Cuenta — mismo patrón
+      ocultar/mostrar/copiar para el `pin`; columna de cliente asignado
+      (vacía por ahora, se llena en Fase 3); botón "Agregar perfil" se
+      deshabilita con texto explicativo cuando se alcanza `pantallasMax`
+      del servicio, en vez de dejar que falle con el 409 del backend;
+      editar/desactivar/reactivar por perfil con el mismo patrón de
+      confirmación del resto de la app
+- [x] Componente compartido `SecretValue` (`shared/secret-value/`) para el
+      patrón ocultar/mostrar/copiar, reutilizado en `claveServicio`,
+      `claveCorreo` y `pin` — el valor real nunca se renderiza en el DOM
+      hasta presionar "Mostrar", y en ningún punto del código (frontend ni
+      backend) se hace `console.log` de `claveServicio`/`claveCorreo`/`pin`
+- [x] Tests de componente: listado, form dialog de cuenta, y detalle
+      (incluyendo que las claves no aparecen en el DOM hasta presionar
+      "Mostrar")
+- [x] **Verificado end-to-end** contra Postgres local: cifrado simétrico
+      confirmado en DB, credenciales nunca expuestas en el listado ni en
+      consola/logs, límite de pantallas validado tanto al crear como al
+      reactivar un perfil (409 limpio, manejado en la UI sin romper)
 
 ## Fase 3 — Ventas
 
