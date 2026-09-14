@@ -276,7 +276,7 @@ Si se agrega un DTO de update nuevo en fases futuras, evitar el patrón
       devuelta por el backend, y que las credenciales de Cuentas (Fase 2)
       siguen sin exponerse en ningún punto de este flujo
 
-## Fase 4 — Vencimientos / Alertas — 🚧 en curso (backend completo)
+## Fase 4 — Vencimientos / Alertas — ✅ completa (2026-09-14)
 
 - [x] `GET /api/sales` extendido con filtros opcionales `vencimiento`
       (`vencida`/`por_vencer`/`al_dia`) y `diasAlerta` (int, default 3,
@@ -320,13 +320,28 @@ Si se agrega un DTO de update nuevo en fases futuras, evitar el patrón
       con los conteos reales (`{vencidas:2, porVencer:3, alDia:4}` sobre
       9 ventas creadas a propósito, verificado con la BD limpia antes y
       después)
-- [ ] **Pendiente**: frontend de Vencimientos/Alertas
-- [ ] **Pendiente**: correr el cambio contra producción en Railway (este
-      no requiere migración: `vencimiento`/`diasAlerta`/`summary` son
-      solo lógica de query, no tocan el schema)
-- [ ] **Pendiente**: Alertas (in-app como mínimo; canal externo se
-      define en Fase 7) — todavía no implementado, solo el cálculo de
-      los tres estados vía `GET /api/sales` y `/summary`
+- [x] Frontend de Vencimientos (`/vencimientos`) — listado de ventas
+      filtrado por `vencimiento` (`vencida`/`por_vencer`/`al_dia`) y
+      `diasAlerta`, con botón directo a WhatsApp por fila para avisarle
+      al cliente
+- [x] Dashboard — tarjetas de resumen (`vencidas`/`porVencer`/`alDia`)
+      consumiendo `GET /api/sales/summary`; cada tarjeta navega a
+      `/vencimientos` con el filtro correspondiente
+- [x] **Bug encontrado y corregido**: `limpiarNumeroWhatsapp()`
+      (`nocturne-web/src/app/features/sales/whatsapp.util.ts`) no
+      anteponía el código de país — los números de Contactos suelen
+      guardarse en formato local peruano (9 dígitos, sin `+51`), y
+      `wa.me` con esos 9 dígitos se queda cargando indefinidamente en
+      vez de abrir el chat. Ahora antepone `51` cuando el número
+      limpio tiene exactamente 9 dígitos; si ya viene con código de
+      país lo deja igual. Con test de regresión para ambos casos
+- [x] El cambio de `vencimiento`/`diasAlerta`/`summary` no requirió
+      migración (solo lógica de query) y ya está corriendo en
+      producción en Railway
+- [x] **Verificado end-to-end**: los tres filtros de vencimiento y el
+      `summary` del dashboard contra el servidor local, y el botón de
+      WhatsApp del listado abriendo el chat directo con un número real
+      de Contactos (antes se quedaba cargando por el bug de arriba)
 
 ## Fase 5 — Contabilidad / Caja
 
