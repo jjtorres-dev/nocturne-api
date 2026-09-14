@@ -167,11 +167,73 @@ Si se agrega un DTO de update nuevo en fases futuras, evitar el patrón
       consola/logs, límite de pantallas validado tanto al crear como al
       reactivar un perfil (409 limpio, manejado en la UI sin romper)
 
-## Fase 3 — Ventas
+## Fase 3 — Ventas — 🚧 en curso (backend completo)
 
-- [ ] Entidad Venta que conecta Servicios + Cuentas/Perfiles + Contactos
-- [ ] Flujo de creación de venta (asignar perfil libre a un contacto)
-- [ ] Listado e historial de ventas
+- [x] Migración: columna `cliente_id` (FK a `contacts`, nullable) agregada a
+      `accounts` — mismo propósito que ya tiene `profiles.clienteId`, para
+      el caso de servicios SIN_PERFILES/IPTV donde se vende la cuenta
+      completa en vez de un perfil individual. Se agregó también
+      `clienteId` opcional a `CreateAccountDto`/`UpdateAccountDto` por
+      simetría con `Profile` (en la práctica lo sincroniza `SalesService`,
+      no se edita a mano desde el CRUD de Cuentas)
+- [x] Entidad Venta (`src/sales/`, clase `Sale` — mismo criterio en inglés
+      que `Service`/`Contact`/`Account`/`Profile`) — `clienteId`/
+      `cuentaId`/`perfilId` (nullable)/`servicioId` (copiado de la cuenta
+      al crear), `codigoVenta` único autogenerado desde la secuencia de
+      Postgres `sales_codigo_venta_seq` (formato `V-00001`), fechas,
+      `precio`/`moneda` (enum de 12 monedas: PEN, USD, ARS, BS, CLP, COP,
+      CRC, CUP, DOP, MXN, PYG, UYU)/`tasaCambio` (default 1)/`precioPEN`
+      (`precio * tasaCambio`, calculado al guardar), `metodoPago`,
+      `renovacionAutomatica`, `activo`
+- [x] **Agregado no pedido explícitamente pero necesario**: columna
+      `duracionMeses` (snapshot de `Service.duracionMeses` al momento de
+      la venta) — el endpoint de renovación tiene que sumar la duración
+      "congelada" en la venta, no la del catálogo actual, y no había otro
+      lugar de donde sacar ese valor
+- [x] Validaciones al crear: CON_PERFILES/FAMILIAR exige `perfilId` (400 si
+      falta) y que ese perfil no tenga ya otra venta activa (409);
+      SIN_PERFILES/IPTV exige que NO venga `perfilId` (400 si viene) y que
+      la cuenta no tenga ya otra venta activa directa (409); sincroniza
+      `clienteId` en el Perfil o la Cuenta según corresponda
+- [x] Al desactivar una venta: libera el `clienteId` del Perfil/Cuenta
+      correspondiente. Al reactivar: vuelve a validar exclusividad antes
+      de reasignar — 409 (indicando qué venta lo ocupa) si alguien más lo
+      tomó mientras tanto
+- [x] `POST /api/sales/:id/renew` — extiende `fechaFin` sumando el
+      `duracionMeses` *snapshot* de la venta, no el del catálogo actual.
+      Los meses fraccionarios (ej. 2.5, ver `Service.duracionMeses`) se
+      aproximan a días asumiendo mes de 30 días (`src/sales/date.util.ts`,
+      documentado ahí — no hay otra convención de negocio definida para
+      "medio mes")
+- [x] CRUD completo — `GET` con filtros `clienteId`/`servicioId`/`activo`,
+      `GET /:id`, `POST`, `PATCH` (`repository.update()`, recalcula
+      `precioPEN` si cambian `precio`/`tasaCambio`), `DELETE` soft,
+      `reactivate`; mismo guard admin-only para escritura. `PATCH`
+      deliberadamente NO permite reasignar `clienteId`/`cuentaId`/
+      `perfilId` (ver comentario en `UpdateSaleDto`): esa reasignación
+      tiene que pasar por las validaciones de exclusividad, así que
+      reasignar implica desactivar la venta y crear una nueva
+- [x] Tests unitarios (23 nuevos, 66 en total en el repo): exclusividad de
+      asignación (perfil y cuenta ocupados → 409), exigencia/rechazo de
+      `perfilId` según tipo de servicio (400), liberación al desactivar,
+      bloqueo al reactivar si ya no está libre, cálculo de `precioPEN` (en
+      creación y en `update`), generación de `codigoVenta`, y el endpoint
+      de renovación (incluye la aritmética de meses fraccionarios en
+      `date.util.spec.ts`)
+- [x] Migración (`AddSalesAndAccountCliente`) generada con
+      `migration:generate` y revisada a mano — se le agregó a mano la
+      secuencia `sales_codigo_venta_seq` (TypeORM no la genera desde la
+      entidad; la usa directamente `SalesService.generateCodigoVenta()`
+      con `nextval()`); corrida contra Postgres local
+- [x] Probado manualmente contra el servidor local: crear venta de perfil
+      → confirmar `clienteId` sincronizado en el perfil → volver a vender
+      el mismo perfil (409) → desactivar → confirmar que se liberó
+      (`clienteId` null) → otro cliente ocupa el mismo perfil → reactivar
+      la venta original (409, indica qué venta lo ocupa ahora) → venta
+      directa sobre cuenta SIN_PERFILES con conversión de moneda
+      (`precioPEN` correcto) → renovar y confirmar la nueva `fechaFin`
+- [ ] **Pendiente**: frontend de Ventas
+- [ ] **Pendiente**: correr la migración contra producción en Railway
 
 ## Fase 4 — Vencimientos / Alertas
 
