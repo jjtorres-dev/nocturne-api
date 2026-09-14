@@ -343,10 +343,92 @@ Si se agrega un DTO de update nuevo en fases futuras, evitar el patrón
       WhatsApp del listado abriendo el chat directo con un número real
       de Contactos (antes se quedaba cargando por el bug de arriba)
 
-## Fase 5 — Contabilidad / Caja
+## Fase 5 — Contabilidad / Caja — 🚧 en curso (backend completo)
 
-- [ ] Registro de ingresos/egresos ligados a ventas
-- [ ] Reporte de caja (por período)
+- [x] Entidad `Payment` (`src/payments/`, tabla `payments`) y `Expense`
+      (`src/expenses/`, tabla `expenses`) — nombres en inglés por el mismo
+      criterio que `Sale`/`Account`/`Profile` (el pedido original las
+      llamaba "Pago"/"Gasto", pero se mantiene la convención del repo).
+      Ambas calculan `montoPEN = monto * tasaCambio` (redondeado a 2
+      decimales) igual que `Sale.precioPEN`; se extrajo ese redondeo a
+      `src/common/round2.ts` para no triplicarlo entre `SalesService`,
+      `PaymentsService` y `ExpensesService`
+- [x] `Payment` no tiene endpoints propios: lo crea `SalesService`
+      automáticamente. Al `create()` de una venta, genera un `Payment`
+      `tipo=venta_inicial` con el precio/moneda/tasaCambio/metodoPago de la
+      venta y `fecha=fechaInicio`
+- [x] `POST /api/sales/:id/renew` extendido con body opcional
+      `{ precio?, moneda?, tasaCambio?, metodoPago? }`. **Decisión no
+      pedida explícitamente pero necesaria para que el reporte de
+      contabilidad tenga sentido**: además de crear el `Payment`
+      `tipo=renovacion`, la venta misma actualiza esos 4 campos (y
+      recalcula `precioPEN`) a los valores de la renovación — si no, la
+      venta quedaría mostrando el precio original mientras el historial de
+      pagos ya refleja el nuevo, dos fuentes de verdad desincronizadas. Sin
+      body, los valores "nuevos" son los mismos que ya tenía la venta, así
+      que el resultado es idéntico al comportamiento previo a esta fase
+      salvo por el `Payment` nuevo (eso sí es intencional, pedido
+      explícitamente). La fecha del `Payment` de renovación es la fecha
+      real del servidor al momento de renovar (no viene en el body)
+- [x] CRUD de Gastos (`/api/expenses`) — mismo patrón que Servicios/
+      Contactos (soft delete, reactivate, admin-only para escritura)
+- [x] Módulo `src/accounting/` con 4 reportes, todos con query params
+      opcionales `desde`/`hasta` (default: mes calendario actual completo,
+      calculado en el proceso de Node, no con `CURRENT_DATE` de Postgres
+      como vencimiento — acá el resultado son fechas que se reparten entre
+      varias queries distintas, y así se puede testear como función pura):
+      `GET /summary` (`{ingresos, inversion, gastos, ganancia}`,
+      `ganancia = ingresos - inversion - gastos`), `GET /by-service`
+      (por servicio, `ganancia = ingresos - inversion`, sin gastos porque
+      los gastos operativos no se atribuyen a un servicio en particular),
+      `GET /by-payment-method` (`neto = ingresos - gastos`), y
+      `GET /timeline?groupBy=day|week|month` (`ganancia = ingresos -
+      gastos`, ordenado por período)
+- [x] `ingresos` sale de `Payment.montoPEN` por `fecha` del pago;
+      `inversion` de `Account.costo` por fecha de **creación** de la
+      cuenta (incluye cuentas ya desactivadas: el costo se pagó igual);
+      `gastos` de `Expense.montoPEN` por `fecha`, solo gastos `activo=true`
+- [x] Migración `AddPaymentsAndExpenses` — crea `payments`/`expenses` y,
+      además, una **data migration** que inserta un `Payment` retroactivo
+      `tipo=venta_inicial` por cada `Sale` ya existente (precio/moneda/
+      tasaCambio/precioPEN de la venta, `fecha=fechaInicio`), con
+      `WHERE NOT EXISTS` para que sea idempotente si se corre dos veces.
+      Corrida y verificada contra Postgres local (3 ventas preexistentes →
+      3 Payments retroactivos, segunda corrida manual del INSERT no
+      duplicó nada)
+- [x] **Bug encontrado corrigiendo tests existentes**: `payments.venta_id`
+      tiene FK hacia `sales`, así que el cleanup de
+      `test/sales-vencimiento.e2e-spec.ts` (que borra las `sales` de prueba
+      directo por SQL) empezó a fallar por la FK — ahora borra primero los
+      `payments` de esas ventas
+- [x] Tests unitarios: cálculo de `montoPEN` en `Payment`/`Expense`
+      (`payments.service.spec.ts`, `expenses.service.spec.ts`), que
+      `SalesService.create()` genera su `Payment` inicial y que `renew()`
+      genera el de renovación tanto con body como sin él
+      (`sales.service.spec.ts`), `AccountingService` orquestando los 4
+      reportes con números conocidos (`accounting.service.spec.ts`), y
+      `resolveRango()` como función pura, incluyendo bordes de mes de 31
+      días y año bisiesto (`date-range.util.spec.ts`)
+- [x] Test e2e nuevo (`test/accounting.e2e-spec.ts`): a diferencia de
+      `sales-vencimiento.e2e-spec.ts` (que compara por delta contra
+      "ahora"), acá se usa una fecha fija en el pasado (2020-06-15) que
+      ningún otro test o uso manual toca, filtrando los 4 reportes a
+      exactamente ese día — así el número esperado es exacto y no le
+      afecta que los archivos de e2e corran en paralelo sobre la misma BD
+      compartida (justo el problema que tenía un primer intento por delta:
+      otro e2e corriendo en paralelo contaminaba `inversion`). El `Payment`
+      de renovación y el `created_at` de la cuenta se backdatean a mano
+      con SQL directo porque ninguno de los dos viene expuesto en la API
+- [x] Probado manualmente contra el servidor local: creada una venta
+      (precio 50) → confirmado su `Payment venta_inicial` (monto_pen=50) →
+      renovada con precio 35 → confirmado el segundo `Payment renovacion`
+      (monto_pen=35) → `GET /accounting/by-service` y `/by-payment-method`
+      del día, filtrados al servicio/método de este caso, mostraron
+      exactamente `ingresos=85` (50+35) con `inversion=100` (el costo de
+      la cuenta) — ambos pagos sumados correctamente. Datos de prueba
+      borrados después
+- [ ] **Pendiente**: frontend de Contabilidad (reportes + registro de
+      Gastos)
 
 ## Fase 6 — Combos
 
