@@ -112,23 +112,28 @@ En cada push/PR a `main`, `.github/workflows/ci.yml` corre:
 
 ### Railway (auto-deploy en merge a `main`)
 
-El deploy a Railway **no se automatiza desde aquí**; se configura una vez
-manualmente:
+El backend está desplegado en producción en Railway:
+`https://nocturne-api-production-cb15.up.railway.app`.
 
-1. Crear un proyecto en [Railway](https://railway.app/) y agregar un
-   servicio "Deploy from GitHub repo" apuntando a este repositorio.
-2. En el servicio, agregar un plugin/servicio de **PostgreSQL** (Railway lo
+**El frontend (`nocturne-web`) vive en el mismo proyecto de Railway**, como
+un servicio separado — no en Vercel como se había planeado originalmente.
+Ver el README de `nocturne-web` para el detalle de ese servicio (incluye la
+variable `RAILPACK_SPA_OUTPUT_DIR`, necesaria para que Railway sirva bien
+el build estático de Angular).
+
+Setup del servicio de la API:
+
+1. Proyecto en [Railway](https://railway.app/) con un servicio "Deploy from
+   GitHub repo" apuntando a este repositorio.
+2. Un plugin/servicio de **PostgreSQL** en el mismo proyecto (Railway lo
    provisiona y expone las variables `PGHOST`, `PGPORT`, etc. — mapear estas
    a `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME` en las
    variables de entorno del servicio de la API).
-3. Configurar las variables de entorno del servicio (mismas claves que
-   `.env.example`): `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`,
-   `DB_NAME`, `JWT_SECRET`, `JWT_EXPIRES_IN`, `PORT`.
-4. Activar "Auto Deploy" en la rama `main` — cada merge a `main` que pase CI
-   dispara un nuevo deploy automáticamente.
+3. Variables de entorno del servicio (mismas claves que `.env.example`):
+   `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME`,
+   `JWT_SECRET`, `JWT_EXPIRES_IN`, `PORT`.
+4. "Auto Deploy" activado en la rama `main` — cada merge a `main` que pase
+   CI dispara un nuevo deploy automáticamente.
 5. Los tokens/credenciales de Railway (por ejemplo, si se quisiera disparar
    deploys desde GitHub Actions con `RAILWAY_TOKEN`) **nunca se hardcodean**:
    van como GitHub Secrets del repositorio.
-
-No se realizó ningún deploy real a Railway desde este entorno; este es solo
-el procedimiento a seguir.
