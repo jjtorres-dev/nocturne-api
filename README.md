@@ -73,12 +73,38 @@ Excel usada previamente para llevar el negocio.
      -d '{"email":"admin@nocturne.local","password":"tu-password"}'
    ```
 
-   Con el `accessToken` de la respuesta puedes llamar a la ruta protegida:
+   La respuesta trae `{ accessToken, refreshToken, user }`. Con el
+   `accessToken` puedes llamar a la ruta protegida:
 
    ```bash
    curl http://localhost:3000/api/auth/profile \
      -H "Authorization: Bearer <accessToken>"
    ```
+
+   El `accessToken` dura poco (`ACCESS_TOKEN_EXPIRES_IN`, 15 minutos por
+   defecto). Cuando expire, usa el `refreshToken` para obtener un par nuevo
+   sin volver a pedir credenciales — la respuesta trae un `refreshToken`
+   nuevo (rotación: el que acabas de usar queda revocado, no sirve una
+   segunda vez):
+
+   ```bash
+   curl -X POST http://localhost:3000/api/auth/refresh \
+     -H "Content-Type: application/json" \
+     -d '{"refreshToken":"<refreshToken>"}'
+   ```
+
+   Para cerrar sesión (revoca el refresh token; requiere estar autenticado):
+
+   ```bash
+   curl -X POST http://localhost:3000/api/auth/logout \
+     -H "Authorization: Bearer <accessToken>" \
+     -H "Content-Type: application/json" \
+     -d '{"refreshToken":"<refreshToken>"}'
+   ```
+
+   `POST /api/auth/login` tiene un límite de 5 intentos por minuto por IP
+   (`429` con mensaje claro si se supera) — ver la sección de Seguridad en
+   `PROGRESS.md`.
 
 ## Scripts
 
@@ -95,7 +121,7 @@ Excel usada previamente para llevar el negocio.
 
 ```
 src/
-  auth/           # Login JWT, guards, decorators, estrategia passport
+  auth/           # Login JWT + refresh tokens, guards, decorators, estrategia passport
   users/          # Entidad de usuario y servicio (rol admin por ahora)
   config/         # Configuración y validación de variables de entorno
   app.module.ts   # Módulo raíz (TypeORM, Config, Users, Auth)
@@ -143,7 +169,11 @@ Setup del servicio de la API:
    variables de entorno del servicio de la API).
 3. Variables de entorno del servicio (mismas claves que `.env.example`):
    `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME`,
-   `JWT_SECRET`, `JWT_EXPIRES_IN`, `PORT`.
+   `JWT_SECRET`, `ACCESS_TOKEN_EXPIRES_IN`, `REFRESH_TOKEN_EXPIRES_IN`,
+   `PORT`. Railway pone un único proxy delante del servicio — `main.ts` ya
+   configura `trust proxy` en 1 para que Express (y el rate limit por IP de
+   `POST /auth/login`) lean la IP real del cliente desde
+   `X-Forwarded-For` en vez de la del proxy.
 4. "Auto Deploy" activado en la rama `main` — cada merge a `main` que pase
    CI dispara un nuevo deploy automáticamente.
 5. Los tokens/credenciales de Railway (por ejemplo, si se quisiera disparar

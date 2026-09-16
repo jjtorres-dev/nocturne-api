@@ -3,10 +3,13 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule, type JwtModuleOptions } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { UsersModule } from '../users/users.module.js';
 import { AuthService } from './auth.service.js';
 import { AuthController } from './auth.controller.js';
 import { JwtStrategy } from './jwt.strategy.js';
+import { RefreshToken } from './refresh-token.entity.js';
+import { RefreshTokensService } from './refresh-tokens.service.js';
 
 // Global: JwtAuthGuard/RolesGuard se usan con @UseGuards() en cualquier
 // módulo de features (Servicios, Contactos, y los que sigan), y esos
@@ -18,6 +21,7 @@ import { JwtStrategy } from './jwt.strategy.js';
 @Module({
   imports: [
     UsersModule,
+    TypeOrmModule.forFeature([RefreshToken]),
     PassportModule.register({ defaultStrategy: 'jwt' }),
     // Config por defecto de los throttlers de este módulo. No se registra
     // ThrottlerGuard como APP_GUARD (rate limit no global): solo se aplica
@@ -32,14 +36,14 @@ import { JwtStrategy } from './jwt.strategy.js';
         signOptions: {
           // El tipo de jsonwebtoken solo acepta strings como "1d"/"2h", no un string genérico.
           expiresIn: configService.get<string>(
-            'jwt.expiresIn',
+            'jwt.accessTokenExpiresIn',
           ) as unknown as number,
         },
       }),
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
+  providers: [AuthService, JwtStrategy, RefreshTokensService],
   exports: [AuthService, PassportModule],
 })
 export class AuthModule {}
