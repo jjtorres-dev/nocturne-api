@@ -464,7 +464,7 @@ Si se agrega un DTO de update nuevo en fases futuras, evitar el patrón
       endpoints de Contabilidad y `/expenses` devolvieron exactamente
       los montos esperados, consumidos correctamente por el frontend
 
-## Fase 6 — Combos — 🚧 en curso (backend completo)
+## Fase 6 — Combos — ✅ completa (2026-09-15)
 
 - [x] Entidad `Combo` (`src/combos/`) — `nombre`, `descripcion` (nullable),
       `servicios` (many-to-many con `Service` vía tabla de unión
@@ -582,8 +582,20 @@ Si se agrega un DTO de update nuevo en fases futuras, evitar el patrón
       `clienteId` asignado. Reintentado liberando la cuenta ocupada:
       combo creado correctamente (`C-00020`, 2 ventas hijas con
       `precio=0`). Datos de prueba borrados después
-- [ ] **Pendiente**: frontend de Combos (catálogo + registro de ventas
-      de combo)
+- [x] Frontend de Combos (`nocturne-web`, `features/combos/`): listado y
+      modal de crear/editar con multi-select y chips para los servicios
+      incluidos, desactivar/reactivar — mismo patrón que Servicios
+- [x] Frontend de Ventas de Combo (`nocturne-web`, `features/combo-sales/`):
+      listado, página de crear con las secciones de asignación dinámicas
+      (una por servicio del combo, cascada cuenta→perfil igual que
+      Ventas), detalle de solo lectura de las ventas hijas, y
+      editar/renovar/desactivar/reactivar
+- [x] Badge "Parte de combo" en el listado de Ventas (`features/sales/`)
+      confirmado para las filas con `ventaComboId` no nulo, con el código
+      de la venta de combo (`C-xxxxx`)
+- [x] Rollback transaccional de `POST /api/combo-sales` verificado sin
+      registros parciales (ver test e2e y prueba manual contra Postgres
+      real arriba)
 
 ## Fase 7 — Extras
 
