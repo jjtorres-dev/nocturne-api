@@ -597,6 +597,76 @@ Si se agrega un DTO de update nuevo en fases futuras, evitar el patrón
       registros parciales (ver test e2e y prueba manual contra Postgres
       real arriba)
 
+## Multi-usuario — Fase A: Gestión de Usuarios (backend)
+
+No ligada a una fase numerada del roadmap: extiende el `AuthModule`/
+`UsersModule` de la Fase 0 (hoy solo existía el usuario admin del seed) para
+que el admin pueda dar de alta cuentas de tipo `REVENDEDOR`.
+
+- [x] `UserRole` extendido con `REVENDEDOR` junto a `ADMIN`. El enum vive en
+      Postgres como tipo nativo (`users_role_enum`) — la tabla `users` se
+      creó con `synchronize` en la Fase 0, antes de que el proyecto usara
+      migraciones, así que **esta es la primera migración que toca
+      `users`** (`AddRevendedorRole`, `ALTER TYPE ... ADD VALUE`). El `down`
+      recrea el tipo sin `revendedor` (Postgres no soporta quitar un valor
+      de enum directamente) y falla a propósito si algún usuario quedó con
+      ese rol — comportamiento esperado, no hay a qué otro rol migrarlo sin
+      perder información. Corrida contra Postgres local
+- [x] Módulo `src/users/` con controller nuevo (antes solo tenía
+      `UsersService`, usado por `AuthModule`/`seed`) — **todo el módulo es
+      admin-only** (`@UseGuards(JwtAuthGuard, RolesGuard)` +
+      `@Roles(UserRole.ADMIN)` a nivel de controller), a diferencia de
+      Servicios/Contactos donde la lectura está abierta a cualquier usuario
+      autenticado: un `REVENDEDOR` no tiene motivo para ver la lista de
+      usuarios
+- [x] `GET /api/users`, `GET /api/users/:id` — nunca seleccionan
+      `password_hash` de la DB (mismo criterio que `AccountsService` con las
+      credenciales cifradas: exclusión a nivel de query con `select`, no
+      un borrado manual del campo después de leerlo)
+- [x] `POST /api/users` — hashea la contraseña con bcrypt (mismo costo que
+      `seed.ts`, 10 rounds); 409 si el email ya existe (chequeo explícito
+      antes del insert, mismo criterio que las validaciones de FK en
+      Cuentas, en vez de parsear el error crudo de Postgres)
+- [x] `PATCH /api/users/:id` — `name`/`role`/`password` opcionales
+      (`repository.update()`, mismo patrón anti-`Object.assign` que
+      Servicios/Contactos); si viene `password` se re-hashea. **No permite
+      que un usuario se cambie su propio rol** (403 si `id` coincide con el
+      usuario autenticado y el body trae `role`, sin importar si es un valor
+      distinto o el mismo) — sí permite que se edite su propio nombre o
+      contraseña, el bloqueo es específico de `role`
+- [x] `DELETE /api/users/:id` (soft delete, `isActive=false`) — **no permite
+      auto-desactivarse** (403 si `id` coincide con el usuario autenticado),
+      evita que el admin se bloquee a sí mismo por accidente
+- [x] `PATCH /api/users/:id/reactivate` — mismo patrón que
+      Servicios/Contactos, sin restricción de auto-bloqueo (no aplica:
+      reactivarse a uno mismo no tiene el mismo riesgo que desactivarse)
+- [x] Sin auto-registro público — los usuarios nuevos los crea el admin a
+      mano vía `POST /api/users` y les pasa la contraseña por fuera del
+      sistema, mismo criterio informal que ya se usaba para el admin
+      inicial. Recuperación de contraseña por email, fuera de alcance
+- [x] Tests unitarios (`users.service.spec.ts`, 13 nuevos): hash de
+      contraseña al crear (nunca se devuelve en la respuesta), 409 por
+      email duplicado, `select` sin `password_hash` en el listado, PATCH
+      no toca `password_hash` si no viene `password`, PATCH sí la
+      re-hashea si viene, bloqueo de auto-cambio de rol (permite nombre/
+      password propios), bloqueo de auto-desactivación, 404 en los casos
+      de usuario inexistente
+- [x] Test e2e nuevo (`test/users.e2e-spec.ts`, 11 tests, requiere Postgres
+      corriendo — necesario para probar `RolesGuard` de verdad contra un
+      JWT real con el rol real en el payload, algo que un test unitario con
+      guards mockeados no puede confirmar): CRUD completo contra la API
+      real, 409 por email duplicado, un `REVENDEDOR` recién creado puede
+      loguearse, y **los 6 endpoints del módulo dan 403 a un `REVENDEDOR`**
+      (`GET` lista, `GET :id`, `POST`, `PATCH`, `DELETE`, `PATCH
+      :id/reactivate`), más los 2 casos de auto-bloqueo del admin (`PATCH`
+      con `role` propio, `DELETE` de sí mismo)
+- [x] Probado manualmente contra el servidor local: login admin → crear
+      usuario `REVENDEDOR` (`POST /api/users`, respuesta sin
+      `password_hash`) → login exitoso con esa cuenta nueva (JWT con
+      `role: "revendedor"`) → `GET /api/users` con ese token da 403 →
+      `GET /api/users` como admin lista los usuarios, `password_hash`
+      ausente en todos. Datos de prueba borrados después
+
 ## Fase 7 — Extras
 
 - [ ] Notificaciones por WhatsApp
