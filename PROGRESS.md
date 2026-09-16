@@ -602,3 +602,81 @@ Si se agrega un DTO de update nuevo en fases futuras, evitar el patrón
 - [ ] Notificaciones por WhatsApp
 - [ ] Tasas de cambio en vivo
 - [ ] Backups automáticos
+
+## Seguridad — Autenticación robusta (backend)
+
+No ligada a una fase numerada del roadmap: refuerza el `AuthModule` de la
+Fase 0 en vez de agregar una feature nueva.
+
+- [x] `@nestjs/throttler` en `POST /api/auth/login` (`LoginThrottlerGuard`,
+      `AuthController`) — máximo 5 intentos por minuto por IP, `429` con
+      mensaje claro (`"Demasiados intentos de inicio de sesión..."`).
+      **No es global**: no se registra `ThrottlerGuard` como `APP_GUARD`,
+      solo se aplica con `@UseGuards()` en esa ruta puntual
+- [x] `main.ts` configura `app.set('trust proxy', 1)` (`NestExpressApplication`)
+      — Railway pone un único proxy delante de la API; sin esto, Express ve
+      la IP del proxy para **todas** las requests y el rate limit por IP
+      terminaría siendo, en la práctica, global para todos los clientes
+- [x] Entidad `RefreshToken` (`src/auth/refresh-token.entity.ts`, tabla
+      `refresh_tokens`) — `userId` (FK a `users`), `tokenHash`, `expiresAt`,
+      `revoked`, `createdAt`. **Decisión de diseño no pedida explícitamente**:
+      el valor real del refresh token nunca se guarda ni se puede
+      reconstruir; se genera un secreto aleatorio (`crypto.randomBytes`), se
+      guarda solo su hash (bcrypt, mismo criterio que `User.passwordHash`),
+      y al cliente se le devuelve `"${id}:${secreto}"`. El `id` (de la fila
+      recién creada) actúa de selector para encontrar el registro en O(1)
+      por PK en vez de tener que comparar el secreto contra el hash de
+      todos los refresh tokens activos con `bcrypt.compare`
+- [x] **Bug encontrado corrigiendo la propia feature**: `expiresAt` se
+      declaró primero como `timestamp` (sin zona horaria). Postgres en UTC
+      + Node corriendo en una zona con offset negativo (Perú, UTC-5) hace
+      que `pg` parsee ese valor como si fuera hora de pared **local**, no
+      UTC — un token "vencido hace 1 hora" se leía como vencido varias
+      horas en el **futuro**, y `POST /auth/refresh` lo aceptaba como
+      válido. Se corrigió cambiando la columna a `timestamptz`
+      (`TIMESTAMP WITH TIME ZONE`), que guarda un instante absoluto y no
+      depende de la zona horaria de quien lo lee. Encontrado por el propio
+      test e2e de token vencido, antes de llegar a producción
+- [x] `ACCESS_TOKEN_EXPIRES_IN` (reemplaza `JWT_EXPIRES_IN`, default `15m`)
+      y `REFRESH_TOKEN_EXPIRES_IN` (nueva, default `30d`) — `.env.example`,
+      `README.md` y `.github/workflows/ci.yml` actualizados
+- [x] `POST /api/auth/login` devuelve `{ accessToken, refreshToken, user }`
+- [x] `POST /api/auth/refresh` — valida el refresh token recibido (existe,
+      no vencido, no revocado) y **rota**: revoca el usado y crea uno
+      nuevo, devuelve `{ accessToken, refreshToken }` nuevos. Inválido/
+      vencido/revocado → `401` con mensaje claro ("Sesión expirada, inicia
+      sesión de nuevo")
+- [x] `POST /api/auth/logout` — protegido con `JwtAuthGuard` (hay que estar
+      logueado para cerrar sesión), revoca el refresh token recibido;
+      idempotente si ya no existe o ya estaba revocado
+- [x] Migración `AddRefreshTokens` — crea `refresh_tokens` con su FK a
+      `users`; el generador también proponía un DROP+ADD de
+      `CHK_payments_venta_xor_combo` (falso positivo de cómo Postgres
+      normaliza el texto de esa expresión vs. cómo TypeORM la arma desde la
+      entidad, sin cambio real), se descartó a mano. Corrida contra
+      Postgres local
+- [x] Tests unitarios (`auth.service.spec.ts`, `refresh-tokens.service.spec.ts`):
+      login devuelve ambos tokens; `refresh` rota y firma un access token
+      nuevo; rechaza (401) token inválido/vencido/revocado/con secreto que
+      no matchea el hash, y un formato de token malformado sin tocar la
+      base de datos; `logout` delega la revocación y es idempotente si el
+      token no existe
+- [x] Tests e2e nuevos — `test/auth.e2e-spec.ts`: login con ambos tokens,
+      rotación (el token viejo deja de servir, reusarlo da 401), token
+      vencido (insertado directo por SQL con `expires_at` en el pasado,
+      sin depender de esperar el TTL real) da 401, logout revoca y el
+      token ya no sirve para refresh, logout sin access token válido da
+      401. `test/auth-throttle.e2e-spec.ts` (aparte, con su propia
+      instancia de app/`ThrottlerStorage` para no competir por la ventana
+      de 5/min con los logins del otro archivo): 5 intentos pasan, el 6to
+      da 429 con el mensaje del rate limit
+- [x] Probado manualmente contra el servidor local con
+      `ACCESS_TOKEN_EXPIRES_IN=10s`: login → `GET /auth/profile` con el
+      access token fresco (200) → esperar el vencimiento → mismo access
+      token ya da 401 → `POST /auth/refresh` con el refresh token da un
+      par nuevo → el access token nuevo funciona en `/auth/profile` (200)
+      → reusar el refresh token viejo da 401 ("Sesión expirada, inicia
+      sesión de nuevo"). También probado el rate limit (intentos de login
+      fallidos consecutivos desde la misma IP terminan en 429) y logout
+      (revoca, el refresh token ya no sirve). `ACCESS_TOKEN_EXPIRES_IN`
+      restaurado a `15m` en `.env` después de la prueba
