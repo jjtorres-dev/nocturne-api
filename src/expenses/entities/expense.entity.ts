@@ -2,16 +2,30 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  JoinColumn,
+  ManyToOne,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { decimalTransformer } from '../../common/decimal.transformer.js';
 import { Moneda } from '../../sales/moneda.enum.js';
+import { User } from '../../users/entities/user.entity.js';
 
 @Entity({ name: 'expenses' })
 export class Expense {
   @PrimaryGeneratedColumn('uuid')
   id: string;
+
+  // Dueño del gasto (Multi-usuario — Fase B6, mismo patrón que
+  // Service/Contact/Account/Sale/Combo.ownerId): un REVENDEDOR solo ve/
+  // toca los suyos, el admin ve todos. Ver ExpensesService.findAllOwned/
+  // findOneOwned — nunca se confía en un filtro que mande el cliente.
+  @Column({ type: 'uuid', name: 'owner_id' })
+  ownerId: string;
+
+  @ManyToOne(() => User)
+  @JoinColumn({ name: 'owner_id' })
+  owner: User;
 
   @Column({ type: 'varchar' })
   descripcion: string;

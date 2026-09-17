@@ -1134,6 +1134,51 @@ Contabilidad de arriba: con `VentaCombo.ownerId` propio, el dueño de un
 - [x] Verificado: lint limpio, 231 tests unitarios y 64 e2e (suite
       completa del repo) en verde, build limpio
 
+## Multi-usuario — Fase B6: Ownership en Gastos (backend)
+
+Mismo patrón que Servicios/Contactos (Fase B1/B2) — módulo simple, sin
+referencias cruzadas que validar (a diferencia de Cuentas/Ventas/Combos).
+
+- [x] Columna `owner_id` (uuid, FK a `users`, `NOT NULL`) agregada a
+      `expenses` — migración `AddExpenseOwner`, mismo patrón nullable →
+      backfill (admin más antiguo) → `NOT NULL` → FK que el resto de
+      módulos. Corrida contra Postgres local; verificado que los 5 gastos
+      existentes quedaron con el admin como dueño
+- [x] `ExpensesService`: misma separación que los módulos anteriores —
+      `findOne`/`findAll` sin scope (uso interno de `AccountingService`,
+      vía `sumMontoPEN`/`sumMontoPENByMetodoPago`/`sumMontoPENByPeriodo`,
+      que hoy agregan sobre todos los gastos sin ningún concepto de
+      usuario HTTP — Contabilidad sigue sin scopear, ver nota de la Fase
+      B5) vs. `findOneOwned`/`findAllOwned` (con scope + `owner: {id,
+      name, email}` poblado, solo para el controller)
+- [x] `ExpensesController` — se sacó `RolesGuard`/`@Roles(ADMIN)` de
+      `POST`/`PATCH`/`DELETE`/`reactivate` (antes admin-only): ahora un
+      `REVENDEDOR` puede crear/editar/desactivar/reactivar gastos propios,
+      acotado por ownership, igual que Servicios/Contactos/Cuentas/
+      Ventas/Combos
+- [x] `create()` toma el `ownerId` del JWT decodificado, nunca del body.
+      `findOneOwned`/`update`/`softDelete`/`reactivate` dan 404 (no 403)
+      sobre un gasto ajeno
+- [x] Tests unitarios (`expenses.service.spec.ts`, reescrito, 10 nuevos):
+      creación con `ownerId` del usuario autenticado, `findAllOwned`
+      acota por `ownerId` solo a `REVENDEDOR`, `owner` poblado igual para
+      admin y revendedor, 404 (no 403) en `findOneOwned`/`update`/
+      `softDelete`/`reactivate` sobre un gasto ajeno; el cálculo de
+      `montoPEN` (Fase 5) sigue verde sin cambios
+- [x] Test e2e nuevo (`test/expenses-ownership.e2e-spec.ts`, 3 tests,
+      **dos usuarios `REVENDEDOR` reales** con JWT real de punta a punta):
+      los 3 casos base (`GET`/`PATCH`/`DELETE`/`reactivate` ajeno → 404,
+      listado nunca lo incluye, control positivo), `owner` poblado igual
+      para el dueño y el admin (sin `password_hash`/`role`), y el admin
+      viendo y tocando los gastos de ambos
+- [x] Probado manualmente contra el servidor local: 2 revendedores, cada
+      uno creó un gasto propio — confirmado 404 de B sobre el gasto de A
+      en `GET`/`PATCH`/`DELETE`, que el listado de cada uno no incluye el
+      del otro (verificado en ambas direcciones), y que el admin ve el
+      gasto de A con `owner` poblado. Datos de prueba borrados después
+- [x] Verificado: lint limpio, 241 tests unitarios y 67 e2e (suite
+      completa del repo) en verde, build limpio
+
 ## Fase 7 — Extras
 
 - [ ] Notificaciones por WhatsApp

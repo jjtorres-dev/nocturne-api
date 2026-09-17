@@ -7,6 +7,8 @@ import { UpdateExpenseDto } from './dto/update-expense.dto.js';
 import { QueryExpenseDto } from './dto/query-expense.dto.js';
 import { round2 } from '../common/round2.js';
 import { TimelineGroupBy } from '../common/timeline-group-by.enum.js';
+import { UserRole } from '../users/user-role.enum.js';
+import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
 
 export interface MetodoPagoGasto {
   metodoPago: string;
@@ -18,6 +20,30 @@ export interface PeriodoGasto {
   gastos: number;
 }
 
+// Se agrega siempre a las respuestas de findOneOwned/findAllOwned (admin o
+// REVENDEDOR, sin condicional por rol): solo id/name/email del dueño, nunca
+// el resto de User (ni por accidente el password_hash) — mismo criterio que
+// Servicios/Contactos/Cuentas/Ventas/Combos.
+const OWNED_SELECT = {
+  id: true,
+  ownerId: true,
+  descripcion: true,
+  monto: true,
+  moneda: true,
+  tasaCambio: true,
+  montoPEN: true,
+  metodoPago: true,
+  fecha: true,
+  activo: true,
+  createdAt: true,
+  updatedAt: true,
+  owner: {
+    id: true,
+    name: true,
+    email: true,
+  },
+} as const;
+
 @Injectable()
 export class ExpensesService {
   constructor(
@@ -25,10 +51,11 @@ export class ExpensesService {
     private readonly expensesRepository: Repository<Expense>,
   ) {}
 
-  create(dto: CreateExpenseDto): Promise<Expense> {
+  create(dto: CreateExpenseDto, currentUser: AuthenticatedUser): Promise<Expense> {
     const tasaCambio = dto.tasaCambio ?? 1;
     const expense = this.expensesRepository.create({
       ...dto,
+      ownerId: currentUser.id,
       tasaCambio,
       montoPEN: round2(dto.monto * tasaCambio),
       activo: true,
@@ -36,6 +63,11 @@ export class ExpensesService {
     return this.expensesRepository.save(expense);
   }
 
+  // Sin scope de ownership: uso interno de otros módulos (AccountingService,
+  // vía sumMontoPEN/sumMontoPENByMetodoPago/sumMontoPENByPeriodo más abajo,
+  // que hoy agregan sobre todos los gastos sin ningún concepto de usuario
+  // HTTP). Nunca exponer este método (ni findOne) directo en el controller
+  // — ver findAllOwned/findOneOwned para eso.
   findAll(query: QueryExpenseDto): Promise<Expense[]> {
     const where: Partial<Pick<Expense, 'activo'>> = {};
     if (query.activo !== undefined) {
@@ -52,9 +84,56 @@ export class ExpensesService {
     return expense;
   }
 
-  async update(id: string, dto: UpdateExpenseDto): Promise<Expense> {
+  // Punto de entrada para el controller: un REVENDEDOR SIEMPRE queda
+  // acotado a lo suyo acá, sin depender de que el cliente mande el filtro
+  // correcto — la seguridad vive en el backend.
+  findAllOwned(
+    query: QueryExpenseDto,
+    currentUser: AuthenticatedUser,
+  ): Promise<Expense[]> {
+    const where: Partial<Pick<Expense, 'activo' | 'ownerId'>> = {};
+    if (query.activo !== undefined) {
+      where.activo = query.activo;
+    }
+    if (currentUser.role === UserRole.REVENDEDOR) {
+      where.ownerId = currentUser.id;
+    }
+    return this.expensesRepository.find({
+      where,
+      relations: { owner: true },
+      select: OWNED_SELECT,
+      order: { fecha: 'DESC' },
+    });
+  }
+
+  // Un REVENDEDOR pidiendo un gasto ajeno recibe 404, no 403: no hay que
+  // confirmarle que el recurso existe si no es suyo.
+  async findOneOwned(
+    id: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<Expense> {
+    const expense = await this.expensesRepository.findOne({
+      where: { id },
+      relations: { owner: true },
+      select: OWNED_SELECT,
+    });
+    if (
+      !expense ||
+      (currentUser.role === UserRole.REVENDEDOR &&
+        expense.ownerId !== currentUser.id)
+    ) {
+      throw new NotFoundException(`Gasto ${id} no encontrado`);
+    }
+    return expense;
+  }
+
+  async update(
+    id: string,
+    dto: UpdateExpenseDto,
+    currentUser: AuthenticatedUser,
+  ): Promise<Expense> {
     // Ver nota en ServicesService.update: nunca Object.assign(entity, dto).
-    const expense = await this.findOne(id);
+    const expense = await this.findOneOwned(id, currentUser);
     const updatePayload: Partial<Expense> = { ...dto };
     if (dto.monto !== undefined || dto.tasaCambio !== undefined) {
       const monto = dto.monto ?? expense.monto;
@@ -62,17 +141,17 @@ export class ExpensesService {
       updatePayload.montoPEN = round2(monto * tasaCambio);
     }
     await this.expensesRepository.update(id, updatePayload);
-    return this.findOne(id);
+    return this.findOneOwned(id, currentUser);
   }
 
-  async softDelete(id: string): Promise<Expense> {
-    const expense = await this.findOne(id);
+  async softDelete(id: string, currentUser: AuthenticatedUser): Promise<Expense> {
+    const expense = await this.findOneOwned(id, currentUser);
     expense.activo = false;
     return this.expensesRepository.save(expense);
   }
 
-  async reactivate(id: string): Promise<Expense> {
-    const expense = await this.findOne(id);
+  async reactivate(id: string, currentUser: AuthenticatedUser): Promise<Expense> {
+    const expense = await this.findOneOwned(id, currentUser);
     expense.activo = true;
     return this.expensesRepository.save(expense);
   }
