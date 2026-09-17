@@ -13,11 +13,25 @@ import { Contact } from '../../contacts/entities/contact.entity.js';
 import { Combo } from '../../combos/entities/combo.entity.js';
 import { Moneda } from '../../sales/moneda.enum.js';
 import { Sale } from '../../sales/entities/sale.entity.js';
+import { User } from '../../users/entities/user.entity.js';
 
 @Entity({ name: 'combo_sales' })
 export class VentaCombo {
   @PrimaryGeneratedColumn('uuid')
   id: string;
+
+  // Dueño de la VentaCombo (Multi-usuario — Fase B5, mismo patrón que
+  // Service/Contact/Account/Sale.ownerId): un REVENDEDOR solo ve/toca las
+  // suyas, el admin ve todas. clienteId/comboId/cada asignación deben
+  // pertenecer a este mismo owner (ver ComboSalesService.
+  // assertReferencesOwnedBy). Las ventas hijas heredan este mismo ownerId
+  // explícitamente (no derivado de la Cuenta, ver ComboSalesService.create).
+  @Column({ type: 'uuid', name: 'owner_id' })
+  ownerId: string;
+
+  @ManyToOne(() => User)
+  @JoinColumn({ name: 'owner_id' })
+  owner: User;
 
   @Column({ type: 'uuid', name: 'cliente_id' })
   clienteId: string;

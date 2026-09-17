@@ -24,13 +24,44 @@ import { PaymentType } from '../payments/payment-type.enum.js';
 import { generateCodigoVenta } from '../sales/codigo-venta.util.js';
 import { addMonthsToDate, todayIso } from '../sales/date.util.js';
 import { round2 } from '../common/round2.js';
+import { UserRole } from '../users/user-role.enum.js';
+import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
 
 interface AsignacionValidada {
   asignacion: ComboSaleAsignacionDto;
   servicio: Service;
   perfilId: string | null;
-  ownerId: string;
 }
+
+// Solo id/name/email del dueño en el join, nunca el resto de User (ni por
+// accidente el password_hash) — mismo criterio que Servicios/Contactos/
+// Cuentas/Ventas/Combos.
+const OWNER_SELECT = {
+  id: true,
+  name: true,
+  email: true,
+} as const;
+
+const OWNED_SELECT = {
+  id: true,
+  ownerId: true,
+  clienteId: true,
+  comboId: true,
+  codigoVenta: true,
+  fechaInicio: true,
+  fechaFin: true,
+  duracionMeses: true,
+  precio: true,
+  moneda: true,
+  tasaCambio: true,
+  precioPEN: true,
+  metodoPago: true,
+  renovacionAutomatica: true,
+  activo: true,
+  createdAt: true,
+  updatedAt: true,
+  owner: OWNER_SELECT,
+} as const;
 
 @Injectable()
 export class ComboSalesService {
@@ -43,9 +74,15 @@ export class ComboSalesService {
     private readonly combosService: CombosService,
   ) {}
 
-  async create(dto: CreateComboSaleDto): Promise<VentaCombo> {
-    await this.contactsService.findOne(dto.clienteId);
-    const combo = await this.combosService.findOne(dto.comboId);
+  async create(
+    dto: CreateComboSaleDto,
+    currentUser: AuthenticatedUser,
+  ): Promise<VentaCombo> {
+    const combo = await this.assertReferencesOwnedBy(
+      dto.clienteId,
+      dto.comboId,
+      currentUser.id,
+    );
     this.assertAsignacionesCubrenCombo(combo, dto.asignaciones);
 
     const precio = dto.precio ?? combo.precioCombo;
@@ -53,19 +90,25 @@ export class ComboSalesService {
 
     const ventaComboId = await this.dataSource.transaction(
       async (manager) => {
-        // Fase 1: validar TODO (existencia + exclusividad) antes de
-        // escribir una sola fila — si cualquier asignación falla acá, la
-        // transacción todavía no tocó la base de datos.
+        // Fase 1: validar TODO (existencia + ownership + exclusividad)
+        // antes de escribir una sola fila — si cualquier asignación falla
+        // acá, la transacción todavía no tocó la base de datos.
         const validadas: AsignacionValidada[] = [];
         for (const asignacion of dto.asignaciones) {
           validadas.push(
-            await this.validarAsignacion(manager, combo, asignacion),
+            await this.validarAsignacion(
+              manager,
+              combo,
+              asignacion,
+              currentUser.id,
+            ),
           );
         }
 
         // Fase 2: recién acá se crea algo.
         const codigoVenta = await this.generateCodigoVentaCombo(manager);
         const ventaCombo = manager.create(VentaCombo, {
+          ownerId: currentUser.id,
           clienteId: dto.clienteId,
           comboId: dto.comboId,
           codigoVenta,
@@ -82,9 +125,14 @@ export class ComboSalesService {
         });
         const savedCombo = await manager.save(ventaCombo);
 
-        for (const { asignacion, servicio, perfilId, ownerId } of validadas) {
+        for (const { asignacion, servicio, perfilId } of validadas) {
           const child = manager.create(Sale, {
-            ownerId,
+            // Explícito con el valor, no derivado de la Cuenta: en la
+            // práctica siempre coincide (validarAsignacion ya exige que la
+            // cuenta pertenezca a currentUser.id), pero la venta hija no
+            // debería depender de esa coincidencia para tener el dueño
+            // correcto.
+            ownerId: currentUser.id,
             clienteId: dto.clienteId,
             cuentaId: asignacion.cuentaId,
             perfilId,
@@ -139,6 +187,10 @@ export class ComboSalesService {
     return this.findOne(ventaComboId);
   }
 
+  // Sin scope de ownership: no tiene caller interno hoy (a diferencia de
+  // Servicios/Contactos/Cuentas), se mantiene por paridad de patrón. Nunca
+  // exponer este método (ni findOne) directo en el controller — ver
+  // findAllOwned/findOneOwned para eso.
   findAll(query: QueryComboSaleDto): Promise<VentaCombo[]> {
     const where: Partial<Pick<VentaCombo, 'clienteId' | 'comboId' | 'activo'>> =
       {};
@@ -170,8 +222,70 @@ export class ComboSalesService {
     return ventaCombo;
   }
 
-  async update(id: string, dto: UpdateComboSaleDto): Promise<VentaCombo> {
-    const ventaCombo = await this.findEntity(id);
+  // Punto de entrada para el controller: un REVENDEDOR SIEMPRE queda
+  // acotado a lo suyo acá, sin depender de que el cliente mande el filtro
+  // correcto — la seguridad vive en el backend.
+  findAllOwned(
+    query: QueryComboSaleDto,
+    currentUser: AuthenticatedUser,
+  ): Promise<VentaCombo[]> {
+    const where: Partial<
+      Pick<VentaCombo, 'clienteId' | 'comboId' | 'activo' | 'ownerId'>
+    > = {};
+    if (query.clienteId) {
+      where.clienteId = query.clienteId;
+    }
+    if (query.comboId) {
+      where.comboId = query.comboId;
+    }
+    if (query.activo !== undefined) {
+      where.activo = query.activo;
+    }
+    if (currentUser.role === UserRole.REVENDEDOR) {
+      where.ownerId = currentUser.id;
+    }
+    return this.ventaCombosRepository.find({
+      where,
+      relations: { owner: true },
+      select: OWNED_SELECT,
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  // Un REVENDEDOR pidiendo una VentaCombo ajena recibe 404, no 403: no hay
+  // que confirmarle que el recurso existe si no es suyo.
+  async findOneOwned(
+    id: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<VentaCombo> {
+    const ventaCombo = await this.ventaCombosRepository.findOne({
+      where: { id },
+      relations: {
+        owner: true,
+        ventas: { servicio: true, cuenta: true, perfil: true },
+      },
+      select: OWNED_SELECT,
+    });
+    if (
+      !ventaCombo ||
+      (currentUser.role === UserRole.REVENDEDOR &&
+        ventaCombo.ownerId !== currentUser.id)
+    ) {
+      throw new NotFoundException(`VentaCombo ${id} no encontrada`);
+    }
+    return ventaCombo;
+  }
+
+  async update(
+    id: string,
+    dto: UpdateComboSaleDto,
+    currentUser: AuthenticatedUser,
+  ): Promise<VentaCombo> {
+    // UpdateComboSaleDto no permite reasignar clienteId/comboId/
+    // asignaciones (ver el comentario en el DTO), así que no hay
+    // referencias que revalidar acá — a diferencia de Combos/Cuentas.
+    // findOneOwned ya cubre el 404 si la VentaCombo es ajena.
+    const ventaCombo = await this.findOneOwned(id, currentUser);
     // Ver nota en ServicesService.update: nunca Object.assign(entity, dto).
     const updatePayload: Partial<VentaCombo> = { ...dto };
     if (dto.precio !== undefined || dto.tasaCambio !== undefined) {
@@ -180,10 +294,14 @@ export class ComboSalesService {
       updatePayload.precioPEN = round2(precio * tasaCambio);
     }
     await this.ventaCombosRepository.update(id, updatePayload);
-    return this.findOne(id);
+    return this.findOneOwned(id, currentUser);
   }
 
-  async softDelete(id: string): Promise<VentaCombo> {
+  async softDelete(
+    id: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<VentaCombo> {
+    await this.findOneOwned(id, currentUser);
     await this.dataSource.transaction(async (manager) => {
       const ventaCombo = await manager.findOne(VentaCombo, { where: { id } });
       if (!ventaCombo) {
@@ -199,7 +317,11 @@ export class ComboSalesService {
     return this.findOne(id);
   }
 
-  async reactivate(id: string): Promise<VentaCombo> {
+  async reactivate(
+    id: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<VentaCombo> {
+    await this.findOneOwned(id, currentUser);
     await this.dataSource.transaction(async (manager) => {
       const ventaCombo = await manager.findOne(VentaCombo, { where: { id } });
       if (!ventaCombo) {
@@ -208,7 +330,8 @@ export class ComboSalesService {
       const ventas = await manager.find(Sale, { where: { ventaComboId: id } });
 
       // Fase 1: revalidar exclusividad de TODAS las ventas hijas antes de
-      // reactivar ninguna.
+      // reactivar ninguna. Ver assertAsignacionSigueLibre: esto corre SIN
+      // scope de ownership a propósito, ni siquiera para el admin.
       for (const venta of ventas) {
         await this.assertAsignacionSigueLibre(manager, venta);
       }
@@ -233,7 +356,8 @@ export class ComboSalesService {
     return this.findOne(id);
   }
 
-  async renew(id: string): Promise<VentaCombo> {
+  async renew(id: string, currentUser: AuthenticatedUser): Promise<VentaCombo> {
+    await this.findOneOwned(id, currentUser);
     await this.dataSource.transaction(async (manager) => {
       const ventaCombo = await manager.findOne(VentaCombo, { where: { id } });
       if (!ventaCombo) {
@@ -261,16 +385,6 @@ export class ComboSalesService {
       await manager.save(payment);
     });
     return this.findOne(id);
-  }
-
-  private async findEntity(id: string): Promise<VentaCombo> {
-    const ventaCombo = await this.ventaCombosRepository.findOne({
-      where: { id },
-    });
-    if (!ventaCombo) {
-      throw new NotFoundException(`VentaCombo ${id} no encontrada`);
-    }
-    return ventaCombo;
   }
 
   // Ni de más ni de menos: cada servicioId del combo debe aparecer
@@ -305,18 +419,45 @@ export class ComboSalesService {
   // sobre el EntityManager de la transacción (no los repositorios inyectados
   // de AccountsService/ProfilesService/SalesService, que usan la conexión
   // por defecto y no participarían del rollback).
+  //
+  // La comprobación de ownership de cuenta/servicio de acá abajo SÍ se
+  // filtra por `ownerId` (404 en ajenos, ver comentario de
+  // assertReferencesOwnedBy) — pero los chequeos de exclusividad
+  // (`ocupado`, más abajo, y assertAsignacionSigueLibre) son la EXCEPCIÓN
+  // deliberada a "todo se filtra por dueño" que rige el resto de este
+  // servicio: miran TODA la tabla `sales`, nunca acotadas por ownerId de
+  // quien pregunta. La razón es de negocio, no técnica: una cuenta o
+  // perfil de streaming es un recurso físico compartido (una sola cuenta
+  // de Netflix con sus pantallas), no algo que se duplique por usuario —
+  // si esta exclusividad se filtrara por owner, dos revendedores distintos
+  // (o el mismo admin) podrían vender el mismo perfil real a la vez sin
+  // que el sistema lo detecte. Mismo criterio ya validado en
+  // SalesService.reactivate (Fase B4).
   private async validarAsignacion(
     manager: EntityManager,
     combo: Combo,
     asignacion: ComboSaleAsignacionDto,
+    ownerId: string,
   ): Promise<AsignacionValidada> {
     const servicio = combo.servicios.find(
       (s) => s.id === asignacion.servicioId,
     )!;
+    // Defensivo: por invariante de CombosService.assertServiciosOwnedBy, un
+    // servicio dentro de `combo.servicios` SIEMPRE pertenece al mismo dueño
+    // que el combo — y el combo ya se validó contra `ownerId` en
+    // assertReferencesOwnedBy. No debería poder fallar nunca en la
+    // práctica llegando por la API real, se valida igual porque servicioId
+    // es una de las referencias pedidas explícitamente (mismo criterio que
+    // el chequeo defensivo de servicioId en SalesService.
+    // assertReferencesOwnedBy).
+    if (servicio.ownerId !== ownerId) {
+      throw new NotFoundException(`Servicio ${servicio.id} no encontrado`);
+    }
+
     const cuenta = await manager.findOne(Account, {
       where: { id: asignacion.cuentaId },
     });
-    if (!cuenta) {
+    if (!cuenta || cuenta.ownerId !== ownerId) {
       throw new NotFoundException(`Cuenta ${asignacion.cuentaId} no encontrada`);
     }
     if (cuenta.servicioId !== asignacion.servicioId) {
@@ -336,6 +477,9 @@ export class ComboSalesService {
           `El servicio "${servicio.nombre}" requiere seleccionar un perfil.`,
         );
       }
+      // El perfil no tiene columna ownerId propia: pertenece al dueño de
+      // la cuenta, que ya se validó arriba (mismo criterio que Profiles
+      // con Accounts en Fase B3).
       const perfil = await manager.findOne(Profile, {
         where: { id: perfilId, cuentaId: asignacion.cuentaId },
       });
@@ -368,13 +512,12 @@ export class ComboSalesService {
       }
     }
 
-    // ComboSales todavía no está scopeado por dueño (fuera de alcance de
-    // Fase B4 — solo "Ventas"/SalesService); las ventas hijas heredan el
-    // ownerId de la Cuenta a la que quedan asignadas, mismo criterio que
-    // SalesService.create() usaría si esto pasara por ahí.
-    return { asignacion, servicio, perfilId, ownerId: cuenta.ownerId };
+    return { asignacion, servicio, perfilId };
   }
 
+  // Ver el comentario extenso en validarAsignacion: esto corre SIN scope de
+  // ownership a propósito, ni siquiera para el admin — la exclusividad de
+  // un recurso físico compartido no depende de quién pregunta.
   private async assertAsignacionSigueLibre(
     manager: EntityManager,
     venta: Sale,
@@ -422,5 +565,26 @@ export class ComboSalesService {
       "SELECT nextval('combo_sales_codigo_venta_seq') AS nextval",
     );
     return `C-${String(nextval).padStart(5, '0')}`;
+  }
+
+  // Verifica que clienteId/comboId existan Y pertenezcan al `ownerId` dado.
+  // No coincide → 404, misma razón que "recurso ajeno" (mismo criterio que
+  // SalesService.assertReferencesOwnedBy). Devuelve el combo (con
+  // `servicios` cargado) ya validado para que create() no tenga que
+  // volver a pedirlo.
+  private async assertReferencesOwnedBy(
+    clienteId: string,
+    comboId: string,
+    ownerId: string,
+  ): Promise<Combo> {
+    const cliente = await this.contactsService.findOne(clienteId);
+    if (cliente.ownerId !== ownerId) {
+      throw new NotFoundException(`Contacto ${clienteId} no encontrado`);
+    }
+    const combo = await this.combosService.findOne(comboId);
+    if (combo.ownerId !== ownerId) {
+      throw new NotFoundException(`Combo ${comboId} no encontrado`);
+    }
+    return combo;
   }
 }

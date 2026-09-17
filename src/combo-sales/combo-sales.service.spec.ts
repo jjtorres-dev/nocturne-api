@@ -1,4 +1,8 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import type { DataSource, Repository } from 'typeorm';
 import { ComboSalesService } from './combo-sales.service.js';
 import { VentaCombo } from './entities/venta-combo.entity.js';
@@ -7,10 +11,32 @@ import { ServiceType } from '../services/service-type.enum.js';
 import { PaymentType } from '../payments/payment-type.enum.js';
 import type { ContactsService } from '../contacts/contacts.service.js';
 import type { CombosService } from '../combos/combos.service.js';
+import { UserRole } from '../users/user-role.enum.js';
+import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
 
 describe('ComboSalesService', () => {
+  const admin: AuthenticatedUser = {
+    id: 'admin-1',
+    email: 'admin@nocturne.dev',
+    name: 'Admin',
+    role: UserRole.ADMIN,
+  };
+  const revendedorA: AuthenticatedUser = {
+    id: 'revendedor-a',
+    email: 'a@nocturne.dev',
+    name: 'Revendedor A',
+    role: UserRole.REVENDEDOR,
+  };
+  const revendedorB: AuthenticatedUser = {
+    id: 'revendedor-b',
+    email: 'b@nocturne.dev',
+    name: 'Revendedor B',
+    role: UserRole.REVENDEDOR,
+  };
+
   const servicioSinPerfiles = {
     id: 'srv-a',
+    ownerId: revendedorA.id,
     nombre: 'Netflix',
     tipo: ServiceType.SIN_PERFILES,
     duracionMeses: 1,
@@ -22,6 +48,7 @@ describe('ComboSalesService', () => {
   };
   const servicioConPerfiles = {
     id: 'srv-b',
+    ownerId: revendedorA.id,
     nombre: 'Disney+',
     tipo: ServiceType.CON_PERFILES,
     duracionMeses: 1,
@@ -33,6 +60,7 @@ describe('ComboSalesService', () => {
   };
   const combo = {
     id: 'combo-1',
+    ownerId: revendedorA.id,
     nombre: 'Combo Netflix + Disney',
     descripcion: null,
     servicios: [servicioSinPerfiles, servicioConPerfiles],
@@ -41,8 +69,8 @@ describe('ComboSalesService', () => {
     createdAt: new Date(),
     updatedAt: new Date(),
   };
-  const cuentaA = { id: 'cta-a', servicioId: 'srv-a' };
-  const cuentaB = { id: 'cta-b', servicioId: 'srv-b' };
+  const cuentaA = { id: 'cta-a', servicioId: 'srv-a', ownerId: revendedorA.id };
+  const cuentaB = { id: 'cta-b', servicioId: 'srv-b', ownerId: revendedorA.id };
   const perfilB = { id: 'per-b', cuentaId: 'cta-b' };
 
   const createDto = {
@@ -104,11 +132,18 @@ describe('ComboSalesService', () => {
       findOne: vi.fn(),
       update: vi.fn(async () => ({ affected: 1 })),
     };
-    contactsService = { findOne: vi.fn().mockResolvedValue({ id: 'cli-1' }) };
+    contactsService = {
+      findOne: vi.fn().mockResolvedValue({ id: 'cli-1', ownerId: revendedorA.id }),
+    };
     combosService = { findOne: vi.fn().mockResolvedValue(combo) };
-    // Default para el findOne() final que hacen create/softDelete/reactivate/
-    // renew después de la transacción (usa el repositorio, no el manager).
-    ventaCombosRepo.findOne.mockResolvedValue({ id: 'venta-combo-1', ventas: [] });
+    // Default para el findOneOwned() previo y el findOne() final que hacen
+    // create/softDelete/reactivate/renew/update (usa el repositorio, no el
+    // manager) — dueño revendedorA salvo que un test lo pise.
+    ventaCombosRepo.findOne.mockResolvedValue({
+      id: 'venta-combo-1',
+      ownerId: revendedorA.id,
+      ventas: [],
+    });
 
     comboSalesService = new ComboSalesService(
       ventaCombosRepo as unknown as Repository<VentaCombo>,
@@ -121,37 +156,66 @@ describe('ComboSalesService', () => {
   describe('create — cobertura de asignaciones', () => {
     it('rechaza si el número de asignaciones no coincide con el del combo', async () => {
       await expect(
-        comboSalesService.create({
-          ...createDto,
-          asignaciones: [createDto.asignaciones[0]],
-        }),
+        comboSalesService.create(
+          { ...createDto, asignaciones: [createDto.asignaciones[0]] },
+          revendedorA,
+        ),
       ).rejects.toThrow(BadRequestException);
       expect(dataSource.transaction).not.toHaveBeenCalled();
     });
 
     it('rechaza si una asignación referencia un servicio fuera del combo', async () => {
       await expect(
-        comboSalesService.create({
-          ...createDto,
-          asignaciones: [
-            createDto.asignaciones[0],
-            { servicioId: 'srv-ajeno', cuentaId: 'cta-x' },
-          ],
-        }),
+        comboSalesService.create(
+          {
+            ...createDto,
+            asignaciones: [
+              createDto.asignaciones[0],
+              { servicioId: 'srv-ajeno', cuentaId: 'cta-x' },
+            ],
+          },
+          revendedorA,
+        ),
       ).rejects.toThrow(BadRequestException);
       expect(dataSource.transaction).not.toHaveBeenCalled();
     });
 
     it('rechaza asignaciones duplicadas para el mismo servicio', async () => {
       await expect(
-        comboSalesService.create({
-          ...createDto,
-          asignaciones: [
-            createDto.asignaciones[0],
-            { ...createDto.asignaciones[0], cuentaId: 'cta-otra' },
-          ],
-        }),
+        comboSalesService.create(
+          {
+            ...createDto,
+            asignaciones: [
+              createDto.asignaciones[0],
+              { ...createDto.asignaciones[0], cuentaId: 'cta-otra' },
+            ],
+          },
+          revendedorA,
+        ),
       ).rejects.toThrow(BadRequestException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('create — ownership de clienteId/comboId (antes de abrir transacción)', () => {
+    it('clienteId ajeno da NotFoundException, sin abrir transacción', async () => {
+      contactsService.findOne.mockResolvedValue({
+        id: 'cli-1',
+        ownerId: revendedorB.id,
+      });
+
+      await expect(comboSalesService.create(createDto, revendedorA)).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('comboId ajeno da NotFoundException, sin abrir transacción', async () => {
+      combosService.findOne.mockResolvedValue({ ...combo, ownerId: revendedorB.id });
+
+      await expect(comboSalesService.create(createDto, revendedorA)).rejects.toThrow(
+        NotFoundException,
+      );
       expect(dataSource.transaction).not.toHaveBeenCalled();
     });
   });
@@ -166,11 +230,12 @@ describe('ComboSalesService', () => {
         .mockResolvedValueOnce(null); // srv-b: perfil libre
     });
 
-    it('crea la VentaCombo con precioCombo por defecto y precioPEN calculado', async () => {
-      const result = await comboSalesService.create(createDto);
+    it('crea la VentaCombo con precioCombo por defecto, precioPEN calculado y ownerId del usuario autenticado', async () => {
+      const result = await comboSalesService.create(createDto, revendedorA);
 
       expect(manager.save).toHaveBeenCalledWith(
         expect.objectContaining({
+          ownerId: revendedorA.id,
           comboId: 'combo-1',
           clienteId: 'cli-1',
           precio: 30,
@@ -183,18 +248,22 @@ describe('ComboSalesService', () => {
     });
 
     it('usa el precio explícito del body si viene, en vez de precioCombo', async () => {
-      await comboSalesService.create({ ...createDto, precio: 40, tasaCambio: 2 });
+      await comboSalesService.create(
+        { ...createDto, precio: 40, tasaCambio: 2 },
+        revendedorA,
+      );
 
       expect(manager.save).toHaveBeenCalledWith(
         expect.objectContaining({ precio: 40, tasaCambio: 2, precioPEN: 80 }),
       );
     });
 
-    it('crea una Sale hija por cada asignación, con precio=0 y ventaComboId', async () => {
-      await comboSalesService.create(createDto);
+    it('crea una Sale hija por cada asignación, con precio=0, ventaComboId y el mismo ownerId del usuario autenticado (explícito, no derivado de la Cuenta)', async () => {
+      await comboSalesService.create(createDto, revendedorA);
 
       expect(manager.save).toHaveBeenCalledWith(
         expect.objectContaining({
+          ownerId: revendedorA.id,
           cuentaId: 'cta-a',
           perfilId: null,
           servicioId: 'srv-a',
@@ -206,6 +275,7 @@ describe('ComboSalesService', () => {
       );
       expect(manager.save).toHaveBeenCalledWith(
         expect.objectContaining({
+          ownerId: revendedorA.id,
           cuentaId: 'cta-b',
           perfilId: 'per-b',
           servicioId: 'srv-b',
@@ -216,7 +286,7 @@ describe('ComboSalesService', () => {
     });
 
     it('sincroniza clienteId en la cuenta (sin perfil) y en el perfil (con perfil)', async () => {
-      await comboSalesService.create(createDto);
+      await comboSalesService.create(createDto, revendedorA);
 
       expect(manager.update).toHaveBeenCalledWith(expect.anything(), 'cta-a', {
         clienteId: 'cli-1',
@@ -229,7 +299,7 @@ describe('ComboSalesService', () => {
     });
 
     it('crea UN solo Payment tipo=venta_inicial ligado a la VentaCombo, no a las hijas', async () => {
-      await comboSalesService.create(createDto);
+      await comboSalesService.create(createDto, revendedorA);
 
       expect(manager.save).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -249,9 +319,13 @@ describe('ComboSalesService', () => {
 
   describe('create — validaciones por asignación', () => {
     it('rechaza si la cuenta no pertenece al servicio de la asignación', async () => {
-      manager.findOne.mockResolvedValueOnce({ id: 'cta-a', servicioId: 'srv-otro' });
+      manager.findOne.mockResolvedValueOnce({
+        id: 'cta-a',
+        servicioId: 'srv-otro',
+        ownerId: revendedorA.id,
+      });
 
-      await expect(comboSalesService.create(createDto)).rejects.toThrow(
+      await expect(comboSalesService.create(createDto, revendedorA)).rejects.toThrow(
         BadRequestException,
       );
     });
@@ -263,13 +337,16 @@ describe('ComboSalesService', () => {
         .mockResolvedValueOnce(cuentaB);
 
       await expect(
-        comboSalesService.create({
-          ...createDto,
-          asignaciones: [
-            createDto.asignaciones[0],
-            { servicioId: 'srv-b', cuentaId: 'cta-b' },
-          ],
-        }),
+        comboSalesService.create(
+          {
+            ...createDto,
+            asignaciones: [
+              createDto.asignaciones[0],
+              { servicioId: 'srv-b', cuentaId: 'cta-b' },
+            ],
+          },
+          revendedorA,
+        ),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -277,14 +354,41 @@ describe('ComboSalesService', () => {
       manager.findOne.mockResolvedValueOnce(cuentaA);
 
       await expect(
-        comboSalesService.create({
-          ...createDto,
-          asignaciones: [
-            { servicioId: 'srv-a', cuentaId: 'cta-a', perfilId: 'per-x' },
-            createDto.asignaciones[1],
-          ],
-        }),
+        comboSalesService.create(
+          {
+            ...createDto,
+            asignaciones: [
+              { servicioId: 'srv-a', cuentaId: 'cta-a', perfilId: 'per-x' },
+              createDto.asignaciones[1],
+            ],
+          },
+          revendedorA,
+        ),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rechaza si el servicio de la asignación no pertenece al mismo dueño (defensivo — no alcanzable con datos reales vía la API, ver comentario en validarAsignacion)', async () => {
+      combosService.findOne.mockResolvedValue({
+        ...combo,
+        servicios: [
+          { ...servicioSinPerfiles, ownerId: revendedorB.id },
+          servicioConPerfiles,
+        ],
+      });
+
+      await expect(comboSalesService.create(createDto, revendedorA)).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(manager.save).not.toHaveBeenCalled();
+    });
+
+    it('rechaza si la cuenta de una asignación pertenece a otro dueño, sin crear nada', async () => {
+      manager.findOne.mockResolvedValueOnce({ ...cuentaA, ownerId: revendedorB.id });
+
+      await expect(comboSalesService.create(createDto, revendedorA)).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(manager.save).not.toHaveBeenCalled();
     });
   });
 
@@ -294,7 +398,7 @@ describe('ComboSalesService', () => {
         .mockResolvedValueOnce(cuentaA)
         .mockResolvedValueOnce({ id: 'sale-x', codigoVenta: 'V-00099' }); // cta-a ocupada
 
-      await expect(comboSalesService.create(createDto)).rejects.toThrow(
+      await expect(comboSalesService.create(createDto, revendedorA)).rejects.toThrow(
         ConflictException,
       );
       expect(manager.save).not.toHaveBeenCalled();
@@ -308,7 +412,7 @@ describe('ComboSalesService', () => {
         .mockResolvedValueOnce(perfilB) // perfil de srv-b: ok
         .mockResolvedValueOnce({ id: 'sale-y', codigoVenta: 'V-00050' }); // per-b OCUPADO
 
-      await expect(comboSalesService.create(createDto)).rejects.toThrow(
+      await expect(comboSalesService.create(createDto, revendedorA)).rejects.toThrow(
         ConflictException,
       );
 
@@ -320,7 +424,7 @@ describe('ComboSalesService', () => {
     });
   });
 
-  describe('findOne / findAll', () => {
+  describe('findOne / findAll (sin scope)', () => {
     it('findOne carga las ventas hijas con servicio/cuenta/perfil', async () => {
       ventaCombosRepo.findOne.mockResolvedValue({ id: 'venta-combo-1' });
 
@@ -348,18 +452,81 @@ describe('ComboSalesService', () => {
     });
   });
 
+  describe('findAllOwned / findOneOwned', () => {
+    it('un REVENDEDOR queda acotado a su propio ownerId, sin importar el query', async () => {
+      ventaCombosRepo.find.mockResolvedValue([]);
+
+      await comboSalesService.findAllOwned({ activo: true }, revendedorA);
+
+      expect(ventaCombosRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { activo: true, ownerId: revendedorA.id },
+        }),
+      );
+    });
+
+    it('un ADMIN ve todo, sin filtro de ownerId', async () => {
+      ventaCombosRepo.find.mockResolvedValue([]);
+
+      await comboSalesService.findAllOwned({}, admin);
+
+      expect(ventaCombosRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({ where: {} }),
+      );
+    });
+
+    it('otro REVENDEDOR recibe NotFoundException (404, no 403) sobre una VentaCombo ajena', async () => {
+      ventaCombosRepo.findOne.mockResolvedValue({
+        id: 'venta-combo-1',
+        ownerId: revendedorA.id,
+      });
+
+      await expect(
+        comboSalesService.findOneOwned('venta-combo-1', revendedorB),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('el ADMIN puede ver la VentaCombo de cualquiera', async () => {
+      ventaCombosRepo.findOne.mockResolvedValue({
+        id: 'venta-combo-1',
+        ownerId: revendedorA.id,
+      });
+
+      const result = await comboSalesService.findOneOwned('venta-combo-1', admin);
+
+      expect(result.ownerId).toBe(revendedorA.id);
+    });
+  });
+
   describe('update', () => {
     it('recalcula precioPEN si cambia precio o tasaCambio', async () => {
       ventaCombosRepo.findOne
-        .mockResolvedValueOnce({ id: 'venta-combo-1', precio: 30, tasaCambio: 1 })
-        .mockResolvedValueOnce({ id: 'venta-combo-1' });
+        .mockResolvedValueOnce({
+          id: 'venta-combo-1',
+          ownerId: revendedorA.id,
+          precio: 30,
+          tasaCambio: 1,
+        })
+        .mockResolvedValueOnce({ id: 'venta-combo-1', ownerId: revendedorA.id });
 
-      await comboSalesService.update('venta-combo-1', { tasaCambio: 2 });
+      await comboSalesService.update('venta-combo-1', { tasaCambio: 2 }, revendedorA);
 
       expect(ventaCombosRepo.update).toHaveBeenCalledWith(
         'venta-combo-1',
         expect.objectContaining({ tasaCambio: 2, precioPEN: 60 }),
       );
+    });
+
+    it('un REVENDEDOR no puede editar una VentaCombo ajena (404)', async () => {
+      ventaCombosRepo.findOne.mockResolvedValue({
+        id: 'venta-combo-1',
+        ownerId: revendedorA.id,
+      });
+
+      await expect(
+        comboSalesService.update('venta-combo-1', { precio: 99 }, revendedorB),
+      ).rejects.toThrow(NotFoundException);
+      expect(ventaCombosRepo.update).not.toHaveBeenCalled();
     });
   });
 
@@ -371,7 +538,7 @@ describe('ComboSalesService', () => {
         { id: 'sale-b', cuentaId: 'cta-b', perfilId: 'per-b' },
       ]);
 
-      await comboSalesService.softDelete('venta-combo-1');
+      await comboSalesService.softDelete('venta-combo-1', revendedorA);
 
       expect(manager.update).toHaveBeenCalledWith(expect.anything(), 'sale-a', {
         activo: false,
@@ -390,6 +557,18 @@ describe('ComboSalesService', () => {
         { activo: false },
       );
     });
+
+    it('un REVENDEDOR no puede desactivar una VentaCombo ajena (404), sin abrir transacción', async () => {
+      ventaCombosRepo.findOne.mockResolvedValue({
+        id: 'venta-combo-1',
+        ownerId: revendedorA.id,
+      });
+
+      await expect(
+        comboSalesService.softDelete('venta-combo-1', revendedorB),
+      ).rejects.toThrow(NotFoundException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
   });
 
   describe('reactivate', () => {
@@ -404,10 +583,29 @@ describe('ComboSalesService', () => {
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce({ id: 'sale-z', codigoVenta: 'V-99' });
 
-      await expect(comboSalesService.reactivate('venta-combo-1')).rejects.toThrow(
+      await expect(
+        comboSalesService.reactivate('venta-combo-1', revendedorA),
+      ).rejects.toThrow(ConflictException);
+      // Ninguna de las dos debe haberse reactivado.
+      expect(manager.update).not.toHaveBeenCalled();
+    });
+
+    it('el caso de exclusividad SIN scope: el ADMIN reactivando una VentaCombo ajena cuyo perfil fue reocupado también da 409, no se salta la validación', async () => {
+      // La VentaCombo es de A (revendedorA), pero quien reactiva es el
+      // ADMIN — la exclusividad no depende de quién pregunta.
+      ventaCombosRepo.findOne.mockResolvedValue({
+        id: 'venta-combo-1',
+        ownerId: revendedorA.id,
+      });
+      manager.findOne.mockResolvedValueOnce({ id: 'venta-combo-1' });
+      manager.find.mockResolvedValueOnce([
+        { id: 'sale-b', cuentaId: 'cta-b', perfilId: 'per-b', codigoVenta: 'V-2' },
+      ]);
+      manager.findOne.mockResolvedValueOnce({ id: 'sale-z', codigoVenta: 'V-99' });
+
+      await expect(comboSalesService.reactivate('venta-combo-1', admin)).rejects.toThrow(
         ConflictException,
       );
-      // Ninguna de las dos debe haberse reactivado.
       expect(manager.update).not.toHaveBeenCalled();
     });
 
@@ -418,7 +616,7 @@ describe('ComboSalesService', () => {
       ]);
       manager.findOne.mockResolvedValueOnce(null); // libre
 
-      await comboSalesService.reactivate('venta-combo-1');
+      await comboSalesService.reactivate('venta-combo-1', revendedorA);
 
       expect(manager.update).toHaveBeenCalledWith(expect.anything(), 'sale-a', {
         activo: true,
@@ -431,6 +629,18 @@ describe('ComboSalesService', () => {
         'venta-combo-1',
         { activo: true },
       );
+    });
+
+    it('un REVENDEDOR no puede reactivar una VentaCombo ajena (404), sin abrir transacción', async () => {
+      ventaCombosRepo.findOne.mockResolvedValue({
+        id: 'venta-combo-1',
+        ownerId: revendedorA.id,
+      });
+
+      await expect(
+        comboSalesService.reactivate('venta-combo-1', revendedorB),
+      ).rejects.toThrow(NotFoundException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
     });
   });
 
@@ -447,7 +657,7 @@ describe('ComboSalesService', () => {
         metodoPago: 'Yape',
       });
 
-      await comboSalesService.renew('venta-combo-1');
+      await comboSalesService.renew('venta-combo-1', revendedorA);
 
       expect(manager.update).toHaveBeenCalledWith(expect.anything(), 'venta-combo-1', {
         fechaFin: '2026-03-05',
@@ -465,6 +675,18 @@ describe('ComboSalesService', () => {
           tipo: PaymentType.RENOVACION,
         }),
       );
+    });
+
+    it('un REVENDEDOR no puede renovar una VentaCombo ajena (404), sin abrir transacción', async () => {
+      ventaCombosRepo.findOne.mockResolvedValue({
+        id: 'venta-combo-1',
+        ownerId: revendedorA.id,
+      });
+
+      await expect(
+        comboSalesService.renew('venta-combo-1', revendedorB),
+      ).rejects.toThrow(NotFoundException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
     });
   });
 });

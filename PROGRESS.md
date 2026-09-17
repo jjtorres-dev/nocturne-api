@@ -999,11 +999,140 @@ agregar una columna `owner_id` a `payments`**. El dueño de un `Payment` se
 deriva siempre de la `Sale` o `VentaCombo` a la que pertenece (`ventaId`
 XOR `ventaComboId`, ya es today un invariante reforzado con un `CHECK`
 en DB desde Fase 6), mismo criterio que Perfiles con Cuentas en Fase B3
-(scoping vía join al padre, sin columna propia). Como `VentaCombo` todavía
-no tiene su propio `ownerId` (ComboSales quedó fuera de alcance en Fase
-B4, ver nota más arriba), scopear `Payment` por dueño probablemente
-implica scopear `ComboSalesService`/`VentaCombo` primero — evaluar ese
-orden cuando se llegue a esta fase, no ahora.
+(scoping vía join al padre, sin columna propia). **Actualización — Fase
+B5**: el bloqueo que describía este párrafo (ComboSales sin `ownerId`
+propio) ya no aplica — `VentaCombo` tiene su propio `ownerId` desde Fase
+B5, así que el dueño de un `Payment` ya puede derivarse de `Sale` **o**
+`VentaCombo`, ambas con `ownerId` propio. Evaluar cuándo se llega a esta
+fase si conviene además exponer un scoping explícito en
+`AccountingService` (los reportes agregan sobre todas las filas sin
+concepto de "usuario que pregunta" hoy), pero la derivación del dueño en
+sí ya no tiene nada pendiente.
+
+## Multi-usuario — Fase B5: Ownership en Combos + Ventas Combo (backend)
+
+Mismo patrón que Servicios/Contactos/Cuentas/Ventas (Fase B1/B2/B3/B4),
+extendido a los dos módulos de Fase 6 (Combos) que habían quedado fuera de
+alcance explícitamente en ese momento. Esto desbloquea la nota de
+Contabilidad de arriba: con `VentaCombo.ownerId` propio, el dueño de un
+`Payment` ya puede derivarse de `Sale` **o** `VentaCombo` indistintamente.
+
+- [x] Columna `owner_id` (uuid, FK a `users`, `NOT NULL`) agregada a
+      `combos` (migración `AddComboOwner`) y a `combo_sales` (migración
+      `AddComboSaleOwner`) — mismo patrón nullable → backfill (admin más
+      antiguo) → `NOT NULL` → FK que el resto de módulos. Corridas contra
+      Postgres local; verificado que los 4 combos y las 3 combo_sales
+      existentes quedaron con el admin como dueño
+- [x] `CombosService`: misma separación que los módulos anteriores —
+      `findOne`/`findAll` sin scope (uso interno de `ComboSalesService`,
+      que valida `comboId` sin ningún concepto de usuario HTTP) vs.
+      `findOneOwned`/`findAllOwned` (con scope + `owner: {id, name,
+      email}` poblado, solo para el controller)
+- [x] `CombosController` — se sacó `RolesGuard`/`@Roles(ADMIN)` de la
+      escritura: ahora un `REVENDEDOR` puede crear/editar/desactivar/
+      reactivar combos propios, acotado por ownership, igual que
+      Servicios/Contactos/Cuentas/Ventas
+- [x] **Validación nueva** (`assertServiciosOwnedBy`): cada `Service`
+      dentro del many-to-many `servicios` de un Combo debe pertenecer al
+      mismo `ownerId` — un combo no puede mezclar catálogo de dueños
+      distintos. En `create()` se valida contra el usuario autenticado; en
+      `update()`, contra el `ownerId` que el combo **ya tiene**, sin
+      importar quién esté editando (mismo criterio que
+      `AccountsService.assertReferencesOwnedBy` con servicioId/proveedorId
+      en Fase B3 — el admin puede editar un combo ajeno sin poder
+      "cruzarle" el catálogo de otro revendedor). No coincide → 404
+- [x] `ComboSalesService`: misma separación — `findOne`/`findAll` sin
+      scope (uso interno; hoy sin caller real, se mantienen por paridad de
+      patrón) vs. `findOneOwned`/`findAllOwned` (con scope + owner
+      poblado). `ComboSalesController` — mismo cambio, `RolesGuard`/
+      `@Roles(ADMIN)` fuera de toda la escritura (incluidos `renew` y
+      `reactivate`)
+- [x] `assertReferencesOwnedBy` (clienteId + comboId, corre **antes** de
+      abrir la transacción) y la validación por asignación dentro de
+      `validarAsignacion` (servicioId defensivo + cuentaId, corren
+      **dentro** de la transacción, sobre el `EntityManager`, mismo motivo
+      que en Fase 6 — los repositorios inyectados de otros servicios no
+      participarían del rollback): todas deben pertenecer al mismo
+      `ownerId` que la `VentaCombo` que se está creando (el usuario
+      autenticado). El perfil de una asignación no tiene columna
+      `ownerId` propia — se valida por transitividad a través de la
+      cuenta, igual que Perfiles con Cuentas en Fase B3
+- [x] Las Sales hijas creadas dentro de la transacción reciben
+      `ownerId: currentUser.id` **explícito**, no derivado de
+      `cuenta.ownerId` (a diferencia del fix de Fase B4, que sí lo derivaba
+      de la cuenta porque ComboSales no estaba scopeado todavía) — en la
+      práctica ambos valores siempre coinciden gracias a la validación del
+      punto anterior, pero la venta hija no depende de esa coincidencia
+      para tener el dueño correcto
+- [x] **El punto de mayor riesgo de esta fase, resuelto explícitamente**:
+      la exclusividad reimplementada dentro de `validarAsignacion` (los
+      chequeos `ocupado`) y en `assertAsignacionSigueLibre` (usada por
+      `reactivate`) siguen el MISMO criterio que en Ventas — miran TODA la
+      tabla `sales`, nunca filtradas por `ownerId` de quien pregunta.
+      Comentario extenso agregado junto a `validarAsignacion` explicando
+      por qué la exclusividad es la EXCEPCIÓN deliberada a "todo se filtra
+      por dueño" que rige el resto del servicio: una cuenta/perfil de
+      streaming es un recurso físico compartido, no algo que se duplique
+      por usuario — si se filtrara por owner, dos revendedores distintos
+      (o el admin) podrían vender el mismo perfil real a la vez sin que el
+      sistema lo detecte
+- [x] Tests unitarios: `combos.service.spec.ts` (reescrito) — creación con
+      `ownerId` del usuario autenticado, mezclar un servicio propio con
+      uno ajeno en `create()` da `NotFoundException` sin llamar a
+      `save()`, `update()` revalida contra el `ownerId` del combo (no de
+      quien edita, incluido el caso "admin reasignando un servicio
+      ajeno"), 404 en `findOneOwned`/`softDelete`/`reactivate` sobre
+      recurso ajeno. `combo-sales.service.spec.ts` (reescrito) —
+      clienteId/comboId ajenos dan 404 sin abrir la transacción; cuenta de
+      una asignación ajena da 404 dentro de la transacción sin llamar a
+      `save()`; el chequeo defensivo de servicioId (mock, no alcanzable
+      con datos reales, mismo criterio documentado que el análogo en
+      Ventas); las Sales hijas se crean con el `ownerId` explícito del
+      usuario autenticado; 404 en `findOneOwned`/`update`/`softDelete`/
+      `reactivate`/`renew` sobre VentaCombo ajena; y el caso de
+      exclusividad sin scope con el **admin** reactivando una VentaCombo
+      ajena cuyo perfil fue reocupado (sigue dando 409, no se salta la
+      validación); los tests de rollback y camino feliz de Fase 6 siguen
+      verdes con el `ownerId` de por medio
+- [x] Tests e2e nuevos, **dos usuarios `REVENDEDOR` reales** con JWT real
+      de punta a punta (mismo cuidado de crear usuarios/fixtures una sola
+      vez en `beforeAll` que en Fase B1-B4, por el rate limit de login):
+      `test/combos-ownership.e2e-spec.ts` (4 tests) — los 3 casos base
+      (ver/editar/desactivar ajeno → 404, listado nunca lo incluye,
+      control positivo, admin ve/edita/desactiva ambos), crear un combo
+      mezclando un servicio propio con uno ajeno → 404 confirmado por
+      conteo de `combos` idéntico antes/después, y reasignar un servicio
+      ajeno en `update()` → 404 sin importar que edite el admin.
+      `test/combo-sales-ownership.e2e-spec.ts` (8 tests) — los 3 casos
+      base (incluye `renew`), crear con clienteId ajeno / comboId ajeno /
+      cuenta de una asignación ajena → 404 con conteos de `combo_sales`/
+      `sales`/`payments` idénticos antes/después (rollback completo, mismo
+      rigor que el test de Fase 6), **el mismo nivel de asignación
+      protegido en Cuentas/Perfiles en Fase B3**: crear con un `perfilId`
+      que pertenece a la cuenta de otro dueño (con la `cuentaId` enviada sí
+      propia) → 404 y rollback completo — requirió fixtures aparte con un
+      servicio `CON_PERFILES` real, porque el resto de los e2e de Combos
+      nunca habían ejercitado ese camino (solo `SIN_PERFILES` hasta ahora);
+      el caso de exclusividad sin scope verificado tanto con el propio
+      dueño como con el admin (ambos dan 409, ninguno se la salta), una
+      repetición explícita del escenario de rollback transaccional de Fase
+      6 con ownership de por medio (conteos idénticos + cuenta que sí
+      validó sin `clienteId`), y el admin viendo las VentaCombo de ambos
+      con `owner` poblado
+- [x] Probado manualmente contra el servidor local: 2 revendedores, cada
+      uno con su propio Combo completo (2 servicios, 1 cliente, 2
+      cuentas) — confirmado 404 al mezclar un servicio de B en un combo de
+      A (`"Servicio ... no encontrado"`), aislamiento total en
+      `GET`/`PATCH`/`DELETE` de combos y de VentaCombo entre A y B (con
+      control positivo y admin viendo ambos con `owner` poblado), 404 al
+      crear una VentaCombo con `clienteId` de B, y el rollback
+      transaccional intacto: ComboSale con la 2da asignación ocupada por
+      una venta suelta → 409, conteos de `combo_sales`/`sales`/`payments`
+      idénticos antes y después, y la cuenta de la 1ra asignación (que sí
+      había validado) confirmada sin `clienteId`. Datos de prueba
+      borrados después
+- [x] Verificado: lint limpio, 231 tests unitarios y 64 e2e (suite
+      completa del repo) en verde, build limpio
 
 ## Fase 7 — Extras
 
