@@ -2,16 +2,29 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  JoinColumn,
+  ManyToOne,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { decimalTransformer } from '../../common/decimal.transformer.js';
 import { ServiceType } from '../service-type.enum.js';
+import { User } from '../../users/entities/user.entity.js';
 
 @Entity({ name: 'services' })
 export class Service {
   @PrimaryGeneratedColumn('uuid')
   id: string;
+
+  // Dueño del servicio (Multi-usuario — Fase B1): un REVENDEDOR solo ve/
+  // toca los suyos, el admin ve todos. Ver ServicesService.findAllOwned/
+  // findOneOwned — nunca se confía en un filtro que mande el cliente.
+  @Column({ type: 'uuid', name: 'owner_id' })
+  ownerId: string;
+
+  @ManyToOne(() => User)
+  @JoinColumn({ name: 'owner_id' })
+  owner: User;
 
   @Column({ type: 'varchar' })
   nombre: string;

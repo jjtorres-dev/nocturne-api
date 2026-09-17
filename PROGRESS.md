@@ -667,6 +667,95 @@ que el admin pueda dar de alta cuentas de tipo `REVENDEDOR`.
       `GET /api/users` como admin lista los usuarios, `password_hash`
       ausente en todos. Datos de prueba borrados después
 
+## Multi-usuario — Fase B1: Ownership en Servicios (backend)
+
+No ligada a una fase numerada del roadmap. Primer módulo del patrón de
+ownership que se va a repetir en Cuentas/Perfiles/Contactos/Ventas etc.:
+se implementa acá primero y se revisa antes de replicarlo, en vez de
+aplicarlo a ciegas en todos los módulos de una.
+
+- [x] Columna `owner_id` (uuid, FK a `users`, `NOT NULL`) agregada a
+      `services` — migración `AddServiceOwner`. Como ya había filas
+      existentes (el Netflix real de producción, entre otras), la
+      migración agrega la columna **nullable primero**, hace un
+      `UPDATE` que asigna el admin más antiguo (`role='admin' ORDER BY
+      created_at ASC LIMIT 1`) como dueño default de las filas sin
+      owner, y recién ahí pone `NOT NULL` + agrega la FK — no puede
+      quedar ninguna fila con `owner_id` nulo. Corrida contra Postgres
+      local, verificada por SQL directo que las 8 filas existentes
+      (incluida `Netflix`) quedaron con el admin como dueño
+- [x] `ServicesService` separa explícitamente los métodos **sin** scope
+      de ownership (`findOne`/`findAll`, sin cambios de firma) de los
+      **con** scope (`findOneOwned`/`findAllOwned`, nuevos) — decisión
+      no pedida explícitamente pero necesaria: `AccountsService`,
+      `ProfilesService`, `SalesService`, `CombosService` y
+      `AccountingService` ya llamaban a `servicesService.findOne()`/
+      `findAll()` para validar FKs o armar reportes, sin ningún
+      concepto de "usuario que hizo la request HTTP" — si esos métodos
+      hubieran quedado con scope de ownership por default, un admin
+      creando una Cuenta sobre un servicio de un revendedor habría
+      roto, y Contabilidad habría dejado de sumar servicios ajenos al
+      caller. Solo el controller usa las versiones `*Owned`
+- [x] `ServicesController` — se sacó `RolesGuard`/`@Roles(ADMIN)` de
+      `POST`/`PATCH`/`DELETE`/`reactivate` (antes admin-only): ahora
+      un `REVENDEDOR` puede crear/editar/desactivar/reactivar
+      servicios igual que un admin, pero acotado a los suyos. El
+      control de acceso pasó de ser por rol a ser por ownership en
+      este módulo
+- [x] `create()` toma el `ownerId` del JWT decodificado
+      (`@CurrentUser()`), nunca del body — el DTO no tiene ni tuvo
+      nunca un campo `ownerId` que el cliente pueda mandar
+- [x] `findAllOwned()`: un `REVENDEDOR` queda acotado a `ownerId = su
+      propio id` **siempre**, agregado al `where` en el propio
+      servicio sin importar qué mande el query string — la
+      seguridad no depende de que el frontend filtre bien.
+      `findOneOwned()`: un `REVENDEDOR` pidiendo/editando/desactivando/
+      reactivando un servicio ajeno recibe **404, no 403** (mismo
+      criterio en `update`/`softDelete`/`reactivate`, que llaman a
+      `findOneOwned` antes de tocar nada) — no se le confirma que el
+      recurso existe si no es suyo. Un `ADMIN` no tiene ningún filtro
+      de `ownerId`, ve y toca todo
+- [x] Tests unitarios (`services.service.spec.ts`, reescrito): creación
+      con `ownerId` del usuario autenticado (no del DTO),
+      `findAllOwned` agrega `ownerId` al `where` solo para
+      `REVENDEDOR`, `findOneOwned`/`update`/`softDelete`/`reactivate`
+      dan `NotFoundException` (no `ForbiddenException`) cuando un
+      `REVENDEDOR` toca un recurso ajeno, y que un `ADMIN` pasa todos
+      esos mismos casos sin restricción
+- [x] **Tratado con el mismo rigor que el rollback de Combos**: test
+      e2e nuevo (`test/services-ownership.e2e-spec.ts`) con **dos
+      usuarios `REVENDEDOR` reales**, creados vía `POST /api/users` y
+      logueados vía `POST /api/auth/login` (JWT real con su `role`
+      real en el payload, no un `userId` pasado a mano) — confirma
+      contra la API real que Usuario B recibe 404 en `GET /:id`,
+      `PATCH`, `DELETE` y `PATCH /:id/reactivate` sobre un servicio de
+      Usuario A, que el listado de B nunca lo incluye, que A sigue
+      viendo/tocando lo propio (control positivo), y que el admin ve y
+      puede editar/desactivar/reactivar los servicios de ambos
+- [x] Probado manualmente contra el servidor local con `curl`: creados
+      2 usuarios `REVENDEDOR` reales, cada uno creó un servicio propio
+      — confirmado que el listado de cada uno no incluye el del otro,
+      que cada uno recibe 404 en `GET`/`PATCH`/`DELETE` sobre el
+      servicio ajeno, y que el admin ve ambos en su listado y puede
+      editar uno y desactivar el otro. Datos de prueba borrados después
+- [x] **Ajuste posterior**: `GET /api/services` y `GET /api/services/:id`
+      ahora siempre incluyen `owner: { id, name, email }` (join simple
+      con `User`, sin condicional por rol — el admin ve el mismo objeto
+      `owner` que ve el propio dueño). Implementado con `relations: {
+      owner: true }` + `select` restringido (`OWNED_SELECT`) para que el
+      join nunca traiga `password_hash` ni el resto de `User` — mismo
+      criterio que `PUBLIC_SELECT` en `UsersService`. Los métodos sin
+      scope (`findOne`/`findAll`, uso interno de otros módulos) no
+      cargan el `owner`, para no pagar el join de más donde no hace
+      falta. `POST`/`PATCH`/`DELETE`/`reactivate` no estaban pedidos
+      explícitamente para este campo, pero `PATCH`/`DELETE`/
+      `reactivate` lo terminan incluyendo igual porque reusan
+      `findOneOwned` internamente — `POST` no, devuelve la entidad
+      recién creada sin el join. Tests unitarios y e2e extendidos para
+      confirmar el `owner` poblado (y sin `password_hash`/`role`) tanto
+      en `GET /:id` como en `GET /`, para el dueño y para el admin por
+      igual
+
 ## Fase 7 — Extras
 
 - [ ] Notificaciones por WhatsApp
