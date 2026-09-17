@@ -756,6 +756,55 @@ aplicarlo a ciegas en todos los módulos de una.
       en `GET /:id` como en `GET /`, para el dueño y para el admin por
       igual
 
+## Multi-usuario — Fase B2: Ownership en Contactos (backend)
+
+Réplica exacta del patrón validado en Fase B1 (Servicios), incluido el
+campo `owner` desde el arranque (no como ajuste posterior).
+
+- [x] Columna `owner_id` (uuid, FK a `users`, `NOT NULL`) agregada a
+      `contacts` — migración `AddContactOwner`, mismo patrón nullable →
+      backfill (admin más antiguo) → `NOT NULL` → FK. Corrida contra
+      Postgres local; verificado que las 29 filas existentes quedaron
+      con `owner_id` apuntando al admin (`count(DISTINCT owner_id) = 1`
+      antes de que hubiera revendedores)
+- [x] `ContactsService` con la misma separación que `ServicesService`:
+      `findOne`/`findAll` sin scope (uso interno de `AccountsService`,
+      `SalesService`, `ComboSalesService`, que validan
+      `proveedorId`/`clienteId` sin ningún concepto de usuario HTTP) vs.
+      `findOneOwned`/`findAllOwned` (con scope + `owner` poblado, solo
+      para el controller)
+- [x] `ContactsController` — mismo cambio que Servicios: se sacó
+      `RolesGuard`/`@Roles(ADMIN)` de `POST`/`PATCH`/`DELETE`/
+      `reactivate` (antes admin-only); ahora un `REVENDEDOR` puede
+      crear/editar/desactivar/reactivar contactos propios, acotado por
+      ownership en vez de por rol
+- [x] `create()` toma `ownerId` del JWT decodificado, nunca del body.
+      `findOneOwned`/`update`/`softDelete`/`reactivate` dan 404 (no 403)
+      sobre un contacto ajeno. `GET /api/contacts` y `GET /:id` incluyen
+      siempre `owner: { id, name, email }`, admin y revendedor por
+      igual — mismo `select` restringido que Servicios, nunca
+      `password_hash`
+- [x] Tests unitarios (`contacts.service.spec.ts`, reescrito, 15 tests):
+      mismo set que Servicios — creación con `ownerId` del usuario
+      autenticado, `findAllOwned` acota por `ownerId` solo a
+      `REVENDEDOR`, `owner` poblado igual para admin y revendedor,
+      404 (no 403) en `findOneOwned`/`update`/`softDelete`/`reactivate`
+      sobre un recurso ajeno
+- [x] Test e2e nuevo (`test/contacts-ownership.e2e-spec.ts`, 3 tests,
+      **dos usuarios `REVENDEDOR` reales** con JWT real de principio a
+      fin): Usuario B da 404 en `GET/:id`, `PATCH`, `DELETE`, `PATCH
+      /:id/reactivate` sobre un contacto de Usuario A y nunca lo ve en
+      su listado (con control positivo de que A sí lo ve/toca), `owner`
+      poblado igual en `GET`/`GET :id` para dueño y admin (y nunca
+      expone `password_hash`/`role`), y el admin ve y puede editar/
+      desactivar/reactivar los contactos de ambos. Mismo cuidado que en
+      Servicios: `userA`/`userB` se crean **una sola vez** en
+      `beforeAll` y se reusan en los 3 `it` (cada uno crea sus propios
+      contactos de prueba) — crear un usuario nuevo por test agota el
+      rate limit de `POST /auth/login` (5/min) dentro del mismo archivo
+- [x] Verificado: lint limpio, 171 tests unitarios y 39 e2e (suite
+      completa del repo) en verde, build limpio
+
 ## Fase 7 — Extras
 
 - [ ] Notificaciones por WhatsApp

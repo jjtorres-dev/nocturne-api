@@ -5,6 +5,28 @@ import { Contact } from './entities/contact.entity.js';
 import { CreateContactDto } from './dto/create-contact.dto.js';
 import { UpdateContactDto } from './dto/update-contact.dto.js';
 import { QueryContactDto } from './dto/query-contact.dto.js';
+import { UserRole } from '../users/user-role.enum.js';
+import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
+
+// Se agrega siempre a las respuestas de findOneOwned/findAllOwned (admin o
+// REVENDEDOR, sin condicional por rol): solo id/name/email del dueño, nunca
+// el resto de User (ni por accidente el password_hash) — mismo criterio que
+// ServicesService (Fase B1).
+const OWNED_SELECT = {
+  id: true,
+  ownerId: true,
+  nombre: true,
+  whatsapp: true,
+  tipo: true,
+  activo: true,
+  createdAt: true,
+  updatedAt: true,
+  owner: {
+    id: true,
+    name: true,
+    email: true,
+  },
+} as const;
 
 @Injectable()
 export class ContactsService {
@@ -13,11 +35,19 @@ export class ContactsService {
     private readonly contactsRepository: Repository<Contact>,
   ) {}
 
-  create(dto: CreateContactDto): Promise<Contact> {
-    const contact = this.contactsRepository.create(dto);
+  create(dto: CreateContactDto, currentUser: AuthenticatedUser): Promise<Contact> {
+    const contact = this.contactsRepository.create({
+      ...dto,
+      ownerId: currentUser.id,
+    });
     return this.contactsRepository.save(contact);
   }
 
+  // Sin scope de ownership: uso interno de otros módulos (AccountsService,
+  // SalesService, ComboSalesService) que necesitan ver cualquier contacto
+  // para validar FKs (proveedorId/clienteId), sin importar quién hizo la
+  // request HTTP original. Nunca exponer este método (ni findOne) directo
+  // en el controller — ver findAllOwned/findOneOwned para eso.
   findAll(query: QueryContactDto): Promise<Contact[]> {
     const where: Partial<Pick<Contact, 'tipo' | 'activo'>> = {};
     if (query.tipo) {
@@ -37,22 +67,72 @@ export class ContactsService {
     return contact;
   }
 
-  async update(id: string, dto: UpdateContactDto): Promise<Contact> {
-    // Ver comentario equivalente en ServicesService.update: evita que
-    // Object.assign pise en memoria los campos no incluidos en el PATCH.
-    await this.findOne(id);
-    await this.contactsRepository.update(id, dto);
-    return this.findOne(id);
+  // Punto de entrada para el controller: un REVENDEDOR SIEMPRE queda
+  // acotado a lo suyo acá, sin depender de que el cliente mande el filtro
+  // correcto — la seguridad vive en el backend.
+  findAllOwned(
+    query: QueryContactDto,
+    currentUser: AuthenticatedUser,
+  ): Promise<Contact[]> {
+    const where: Partial<Pick<Contact, 'tipo' | 'activo' | 'ownerId'>> = {};
+    if (query.tipo) {
+      where.tipo = query.tipo;
+    }
+    if (query.activo !== undefined) {
+      where.activo = query.activo;
+    }
+    if (currentUser.role === UserRole.REVENDEDOR) {
+      where.ownerId = currentUser.id;
+    }
+    return this.contactsRepository.find({
+      where,
+      relations: { owner: true },
+      select: OWNED_SELECT,
+      order: { nombre: 'ASC' },
+    });
   }
 
-  async softDelete(id: string): Promise<Contact> {
-    const contact = await this.findOne(id);
+  // Un REVENDEDOR pidiendo un contacto ajeno recibe 404, no 403: no hay que
+  // confirmarle que el recurso existe si no es suyo.
+  async findOneOwned(
+    id: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<Contact> {
+    const contact = await this.contactsRepository.findOne({
+      where: { id },
+      relations: { owner: true },
+      select: OWNED_SELECT,
+    });
+    if (
+      !contact ||
+      (currentUser.role === UserRole.REVENDEDOR &&
+        contact.ownerId !== currentUser.id)
+    ) {
+      throw new NotFoundException(`Contacto ${id} no encontrado`);
+    }
+    return contact;
+  }
+
+  async update(
+    id: string,
+    dto: UpdateContactDto,
+    currentUser: AuthenticatedUser,
+  ): Promise<Contact> {
+    // Ver comentario equivalente en ServicesService.update: evita que
+    // Object.assign pise en memoria los campos no incluidos en el PATCH.
+    await this.findOneOwned(id, currentUser);
+    await this.contactsRepository.update(id, dto);
+    return this.findOneOwned(id, currentUser);
+  }
+
+  async softDelete(id: string, currentUser: AuthenticatedUser): Promise<Contact> {
+    const contact = await this.findOneOwned(id, currentUser);
     contact.activo = false;
     return this.contactsRepository.save(contact);
   }
 
-  async reactivate(id: string): Promise<Contact> {
-    const contact = await this.findOne(id);
+  async reactivate(id: string, currentUser: AuthenticatedUser): Promise<Contact> {
+    const contact = await this.findOneOwned(id, currentUser);
     contact.activo = true;
     return this.contactsRepository.save(contact);
   }
