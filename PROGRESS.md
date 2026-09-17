@@ -1259,6 +1259,77 @@ módulo de ownership hasta ahora sin migración propia.
 - [x] Verificado: lint limpio, 245 tests unitarios y 77 e2e (suite
       completa del repo) en verde, build limpio
 
+## Multi-usuario — Frontend: Gestión de Usuarios (`nocturne-web`)
+
+Cierra el lado de frontend de la Fase A (backend, `/api/users`, admin-only,
+ya en producción). Vive en el repo `nocturne-web`, no en este.
+
+- [x] `AuthenticatedUser.role` pasó de `string` a un enum `UserRole`
+      (`core/auth/auth.ts`, mismos valores que el backend:
+      `admin`/`revendedor`) — antes no había ningún lugar del frontend que
+      necesitara distinguir el rol; ahora sí (el sidebar y el propio
+      módulo de Usuarios)
+- [x] `AdminLayout` — `navItems` pasó de array estático a un `computed()`
+      que filtra por `item.role` contra `auth.currentUser()?.role`; el
+      item "Usuarios" (`/users`) es el único con `role: UserRole.ADMIN`
+      hoy, así que es el único que un `REVENDEDOR` nunca ve en su sidebar
+- [x] `features/users/` — mismo patrón de CRUD que Servicios/Contactos:
+      `usuario.model.ts`, `usuarios-api.ts`, `usuarios-list/`,
+      `usuario-form-dialog/`. **Diferencia importante con el resto**:
+      `GET /api/users` no acepta ningún filtro por query (a diferencia de
+      Servicios/Contactos/etc.) — el filtro Activo/Inactivo/Todos se
+      implementó enteramente del lado del cliente, sobre la lista
+      completa ya traída, con un `computed()` que depende de una señal
+      `activoFilter` (tuvo que ser señal, no un campo plano, para que el
+      `computed` reaccione — quedó documentado en el propio código tras
+      un test que lo detectó)
+- [x] Protecciones del propio usuario, reflejando las que ya tiene el
+      backend (Fase A): en el modal de editar, si la fila es la del
+      usuario logueado, el select de Rol queda deshabilitado (con hint) y
+      el payload de `PATCH` nunca incluye la clave `role` en absoluto —
+      no alcanza con enviar el mismo valor, el backend da 403 si `role`
+      viene definido y el id coincide con el usuario autenticado, sea
+      cual sea el valor. En el listado, esa misma fila muestra el botón
+      "Desactivar" deshabilitado con tooltip ("No puedes desactivarte a
+      ti mismo") en vez de ocultarlo o dejarlo clickeable
+- [x] El email no es editable (el backend no lo permite, `UpdateUserDto`
+      no tiene ese campo): el input queda deshabilitado en modo edición,
+      con hint explicando por qué. La contraseña es obligatoria al crear
+      y opcional al editar ("Nueva contraseña", vacío = no cambiarla)
+- [x] `GET /api/users` con un `REVENDEDOR` (llegando manualmente a
+      `/users` aunque el link esté oculto) da 403 real del backend — se
+      maneja con un panel dedicado ("Acceso restringido") en vez de dejar
+      la tabla vacía en silencio o romper la pantalla
+- [x] Tests de componente (17 nuevos, 222 en total en `nocturne-web`):
+      `usuario-form-dialog.spec.ts` — creación, edición (incluye que el
+      email queda deshabilitado), que editar a otro usuario sí manda
+      `role`, que editarse a uno mismo nunca manda `role` (ni con el
+      mismo valor), contraseña opcional al editar / obligatoria al crear.
+      `usuarios-list.spec.ts` — filtro activo/inactivo/todos calculado en
+      el cliente, 403 al cargar muestra el panel de acceso restringido
+      (no el mensaje de error genérico), desactivar/reactivar,
+      `isSelf()` identificando la fila propia. `admin-layout.spec.ts` —
+      un ADMIN ve "Usuarios" en el sidebar (en el array `navItems()` y en
+      el DOM), un REVENDEDOR no lo ve en ninguno de los dos
+- [x] Verificado: lint limpio, build de producción limpio, 222 tests de
+      componente (`ng test`) en verde
+- [ ] **Verificación visual con Playwright — pendiente, no se pudo hacer
+      en esta sesión**: el sandbox no tiene Chrome/Chromium instalado, y
+      `npx playwright install chrome` intenta instalar dependencias de
+      sistema vía `sudo` sin tener una terminal/password disponible
+      (falla incluso después de instalar manualmente algunas librerías
+      que pedía). Fedora tiene soporte limitado para los navegadores que
+      Playwright puede instalar por su cuenta — no vale la pena seguir
+      persiguiendo dependencias del SO una por una. **Queda pendiente
+      probar a mano** (o desde un entorno con Chrome disponible) el flujo
+      completo: login admin → crear un `REVENDEDOR` en `/users` → confirmar
+      que aparece en la lista → editarlo (cambiar nombre) → cerrar sesión
+      → loguearse con ese `REVENDEDOR` → confirmar que "Usuarios" no
+      aparece en su sidebar → navegar manualmente a `/users` y confirmar
+      el panel de "Acceso restringido" (no pantalla en blanco) → volver a
+      loguear como admin → desactivar/reactivar el usuario de prueba y
+      confirmar el estado en la lista
+
 ## Fase 7 — Extras
 
 - [ ] Notificaciones por WhatsApp
