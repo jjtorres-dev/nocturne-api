@@ -10,12 +10,25 @@ import type { AccountListItem } from './account-list-item.js';
 import { ServicesService } from '../services/services.service.js';
 import { ContactsService } from '../contacts/contacts.service.js';
 import { round2 } from '../common/round2.js';
+import { UserRole } from '../users/user-role.enum.js';
+import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
 
 export interface ServicioInversion {
   servicioId: string;
   inversion: number;
 }
 
+// Solo id/name/email del dueño en el join, nunca el resto de User (ni por
+// accidente el password_hash) — mismo criterio que Servicios/Contactos.
+const OWNER_SELECT = {
+  id: true,
+  name: true,
+  email: true,
+} as const;
+
+// Sin ownerId/owner: shape del `findAll` sin scope (uso interno, ver más
+// abajo), igual que antes de Fase B3. claveServicio/claveCorreo quedan
+// afuera a propósito: el listado nunca debe exponer credenciales.
 const LIST_SELECT = {
   id: true,
   servicioId: true,
@@ -31,8 +44,24 @@ const LIST_SELECT = {
   activo: true,
   createdAt: true,
   updatedAt: true,
-  // claveServicio / claveCorreo quedan afuera a propósito: el listado
-  // nunca debe exponer credenciales, solo el detalle (findOne).
+} as const;
+
+// Usado por findAllOwned: agrega ownerId/owner (con el `select` anidado
+// restringido a id/name/email — sin esto TypeORM trae el User completo,
+// password_hash incluido, apenas se pide la relación).
+const OWNED_LIST_SELECT = {
+  ...LIST_SELECT,
+  ownerId: true,
+  owner: OWNER_SELECT,
+} as const;
+
+// Usado por findOneOwned: a diferencia del listado, el detalle sí devuelve
+// las credenciales (claveServicio/claveCorreo) — mismo comportamiento de
+// siempre (Fase 2), ahora con ownerId/owner también.
+const OWNED_DETAIL_SELECT = {
+  ...OWNED_LIST_SELECT,
+  claveServicio: true,
+  claveCorreo: true,
 } as const;
 
 @Injectable()
@@ -46,13 +75,30 @@ export class AccountsService {
     private readonly contactsService: ContactsService,
   ) {}
 
-  async create(dto: CreateAccountDto): Promise<Account> {
-    await this.assertReferencesExist(dto.servicioId, dto.proveedorId);
-    const account = this.accountsRepository.create(dto);
+  async create(
+    dto: CreateAccountDto,
+    currentUser: AuthenticatedUser,
+  ): Promise<Account> {
+    await this.assertReferencesOwnedBy(
+      dto.servicioId,
+      dto.proveedorId,
+      currentUser.id,
+    );
+    const account = this.accountsRepository.create({
+      ...dto,
+      ownerId: currentUser.id,
+    });
     return this.accountsRepository.save(account);
   }
 
-  async findAll(query: QueryAccountDto): Promise<AccountListItem[]> {
+  // Sin scope de ownership: uso interno de otros módulos (ProfilesService,
+  // SalesService, AccountingService) que necesitan ver cualquier cuenta sin
+  // importar quién hizo la request HTTP original. Nunca exponer este
+  // método (ni findOne) directo en el controller — ver findAllOwned/
+  // findOneOwned para eso. No trae ownerId/owner ni perfilesCount: ningún
+  // caller interno de hoy los necesita (a diferencia de findAllOwned, que
+  // sí es un endpoint HTTP real).
+  findAll(query: QueryAccountDto): Promise<Account[]> {
     const where: Partial<{
       servicioId: string;
       proveedorId: string;
@@ -68,34 +114,11 @@ export class AccountsService {
       where.activo = query.activo;
     }
 
-    const accounts = await this.accountsRepository.find({
+    return this.accountsRepository.find({
       where,
       select: LIST_SELECT,
       order: { createdAt: 'DESC' },
     });
-
-    if (accounts.length === 0) {
-      return [];
-    }
-
-    const counts = await this.profilesRepository
-      .createQueryBuilder('profile')
-      .select('profile.cuentaId', 'cuentaId')
-      .addSelect('COUNT(*)', 'count')
-      .where('profile.cuentaId IN (:...ids)', {
-        ids: accounts.map((a) => a.id),
-      })
-      .andWhere('profile.activo = true')
-      .groupBy('profile.cuentaId')
-      .getRawMany<{ cuentaId: string; count: string }>();
-    const countByAccountId = new Map(
-      counts.map((c) => [c.cuentaId, parseInt(c.count, 10)]),
-    );
-
-    return accounts.map((account) => ({
-      ...account,
-      perfilesCount: countByAccountId.get(account.id) ?? 0,
-    }));
   }
 
   async findOne(id: string): Promise<Account> {
@@ -106,22 +129,91 @@ export class AccountsService {
     return account;
   }
 
-  async update(id: string, dto: UpdateAccountDto): Promise<Account> {
-    await this.findOne(id);
-    await this.assertReferencesExist(dto.servicioId, dto.proveedorId);
-    // Ver nota en ServicesService.update: nunca Object.assign(entity, dto).
-    await this.accountsRepository.update(id, dto);
-    return this.findOne(id);
+  // Punto de entrada para el controller: un REVENDEDOR SIEMPRE queda
+  // acotado a lo suyo acá, sin depender de que el cliente mande el filtro
+  // correcto — la seguridad vive en el backend.
+  async findAllOwned(
+    query: QueryAccountDto,
+    currentUser: AuthenticatedUser,
+  ): Promise<AccountListItem[]> {
+    const where: Partial<{
+      servicioId: string;
+      proveedorId: string;
+      activo: boolean;
+      ownerId: string;
+    }> = {};
+    if (query.servicioId) {
+      where.servicioId = query.servicioId;
+    }
+    if (query.proveedorId) {
+      where.proveedorId = query.proveedorId;
+    }
+    if (query.activo !== undefined) {
+      where.activo = query.activo;
+    }
+    if (currentUser.role === UserRole.REVENDEDOR) {
+      where.ownerId = currentUser.id;
+    }
+
+    const accounts = await this.accountsRepository.find({
+      where,
+      relations: { owner: true },
+      select: OWNED_LIST_SELECT,
+      order: { createdAt: 'DESC' },
+    });
+
+    return this.withPerfilesCount(accounts);
   }
 
-  async softDelete(id: string): Promise<Account> {
-    const account = await this.findOne(id);
+  // Un REVENDEDOR pidiendo una cuenta ajena recibe 404, no 403: no hay que
+  // confirmarle que el recurso existe si no es suyo.
+  async findOneOwned(
+    id: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<Account> {
+    const account = await this.accountsRepository.findOne({
+      where: { id },
+      relations: { owner: true },
+      select: OWNED_DETAIL_SELECT,
+    });
+    if (
+      !account ||
+      (currentUser.role === UserRole.REVENDEDOR &&
+        account.ownerId !== currentUser.id)
+    ) {
+      throw new NotFoundException(`Cuenta ${id} no encontrada`);
+    }
+    return account;
+  }
+
+  async update(
+    id: string,
+    dto: UpdateAccountDto,
+    currentUser: AuthenticatedUser,
+  ): Promise<Account> {
+    const existing = await this.findOneOwned(id, currentUser);
+    // El servicio/proveedor referenciado tiene que pertenecer al MISMO
+    // dueño que la cuenta ya tiene, sin importar quién esté editando — así
+    // el admin puede editar una cuenta ajena sin poder "cruzarle" el
+    // catálogo de otro revendedor.
+    await this.assertReferencesOwnedBy(
+      dto.servicioId,
+      dto.proveedorId,
+      existing.ownerId,
+    );
+    // Ver nota en ServicesService.update: nunca Object.assign(entity, dto).
+    await this.accountsRepository.update(id, dto);
+    return this.findOneOwned(id, currentUser);
+  }
+
+  async softDelete(id: string, currentUser: AuthenticatedUser): Promise<Account> {
+    const account = await this.findOneOwned(id, currentUser);
     account.activo = false;
     return this.accountsRepository.save(account);
   }
 
-  async reactivate(id: string): Promise<Account> {
-    const account = await this.findOne(id);
+  async reactivate(id: string, currentUser: AuthenticatedUser): Promise<Account> {
+    const account = await this.findOneOwned(id, currentUser);
     account.activo = true;
     return this.accountsRepository.save(account);
   }
@@ -168,15 +260,53 @@ export class AccountsService {
     }));
   }
 
-  private async assertReferencesExist(
-    servicioId?: string,
-    proveedorId?: string,
+  private async withPerfilesCount<T extends { id: string }>(
+    accounts: T[],
+  ): Promise<(T & { perfilesCount: number })[]> {
+    if (accounts.length === 0) {
+      return [];
+    }
+
+    const counts = await this.profilesRepository
+      .createQueryBuilder('profile')
+      .select('profile.cuentaId', 'cuentaId')
+      .addSelect('COUNT(*)', 'count')
+      .where('profile.cuentaId IN (:...ids)', {
+        ids: accounts.map((a) => a.id),
+      })
+      .andWhere('profile.activo = true')
+      .groupBy('profile.cuentaId')
+      .getRawMany<{ cuentaId: string; count: string }>();
+    const countByAccountId = new Map(
+      counts.map((c) => [c.cuentaId, parseInt(c.count, 10)]),
+    );
+
+    return accounts.map((account) => ({
+      ...account,
+      perfilesCount: countByAccountId.get(account.id) ?? 0,
+    }));
+  }
+
+  // Verifica que el servicio y/o proveedor referenciados por una cuenta
+  // existan Y pertenezcan al `ownerId` dado. No coincide → 404, misma razón
+  // que "recurso ajeno": referenciar algo que no es tuyo no es un caso
+  // válido, no hace falta un 409/403 distinto.
+  private async assertReferencesOwnedBy(
+    servicioId: string | undefined,
+    proveedorId: string | undefined,
+    ownerId: string,
   ): Promise<void> {
     if (servicioId) {
-      await this.servicesService.findOne(servicioId);
+      const servicio = await this.servicesService.findOne(servicioId);
+      if (servicio.ownerId !== ownerId) {
+        throw new NotFoundException(`Servicio ${servicioId} no encontrado`);
+      }
     }
     if (proveedorId) {
-      await this.contactsService.findOne(proveedorId);
+      const proveedor = await this.contactsService.findOne(proveedorId);
+      if (proveedor.ownerId !== ownerId) {
+        throw new NotFoundException(`Contacto ${proveedorId} no encontrado`);
+      }
     }
   }
 }

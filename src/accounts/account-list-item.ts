@@ -2,6 +2,8 @@
 // ni claveCorreo (eso solo se expone en el detalle, GET /accounts/:id).
 export interface AccountListItem {
   id: string;
+  ownerId: string;
+  owner: { id: string; name: string; email: string };
   servicioId: string;
   proveedorId: string | null;
   clienteId: string | null;

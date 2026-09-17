@@ -7,6 +7,7 @@ import { UpdateProfileDto } from './dto/update-profile.dto.js';
 import { QueryProfileDto } from './dto/query-profile.dto.js';
 import { AccountsService } from '../accounts.service.js';
 import { ServicesService } from '../../services/services.service.js';
+import type { AuthenticatedUser } from '../../auth/jwt.strategy.js';
 
 @Injectable()
 export class ProfilesService {
@@ -17,7 +18,16 @@ export class ProfilesService {
     private readonly servicesService: ServicesService,
   ) {}
 
-  async create(accountId: string, dto: CreateProfileDto): Promise<Profile> {
+  // Perfiles no tiene su propia columna ownerId: el scoping deriva SIEMPRE
+  // del owner_id de la Cuenta padre. accountsService.findOneOwned() ya
+  // hace ese chequeo (404 si la cuenta no existe o es ajena) — reusarlo acá
+  // es "el join" pedido, sin duplicar la lógica de ownership en dos lados.
+  async create(
+    accountId: string,
+    dto: CreateProfileDto,
+    currentUser: AuthenticatedUser,
+  ): Promise<Profile> {
+    await this.accountsService.findOneOwned(accountId, currentUser);
     await this.assertUnderScreenLimit(accountId);
     const profile = this.profilesRepository.create({
       ...dto,
@@ -26,11 +36,12 @@ export class ProfilesService {
     return this.profilesRepository.save(profile);
   }
 
-  async findAllByAccount(
+  async findAllOwned(
     accountId: string,
     query: QueryProfileDto,
+    currentUser: AuthenticatedUser,
   ): Promise<Profile[]> {
-    await this.accountsService.findOne(accountId);
+    await this.accountsService.findOneOwned(accountId, currentUser);
     const where: Partial<Pick<Profile, 'cuentaId' | 'activo'>> = {
       cuentaId: accountId,
     };
@@ -40,6 +51,10 @@ export class ProfilesService {
     return this.profilesRepository.find({ where, order: { nombre: 'ASC' } });
   }
 
+  // Sin scope de ownership: uso interno de SalesService, que necesita ver
+  // cualquier perfil sin importar quién hizo la request HTTP original.
+  // Nunca exponer este método directo en el controller — ver
+  // findOneOwned para eso.
   async findOne(accountId: string, id: string): Promise<Profile> {
     const profile = await this.profilesRepository.findOne({
       where: { id, cuentaId: accountId },
@@ -52,25 +67,46 @@ export class ProfilesService {
     return profile;
   }
 
+  // Un REVENDEDOR pidiendo un perfil de una cuenta ajena recibe 404 (por la
+  // cuenta, no por el perfil): no hay que confirmarle que la cuenta existe
+  // si no es suya.
+  async findOneOwned(
+    accountId: string,
+    id: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<Profile> {
+    await this.accountsService.findOneOwned(accountId, currentUser);
+    return this.findOne(accountId, id);
+  }
+
   async update(
     accountId: string,
     id: string,
     dto: UpdateProfileDto,
+    currentUser: AuthenticatedUser,
   ): Promise<Profile> {
-    await this.findOne(accountId, id);
+    await this.findOneOwned(accountId, id, currentUser);
     // Ver nota en ServicesService.update: nunca Object.assign(entity, dto).
     await this.profilesRepository.update(id, dto);
-    return this.findOne(accountId, id);
+    return this.findOneOwned(accountId, id, currentUser);
   }
 
-  async softDelete(accountId: string, id: string): Promise<Profile> {
-    const profile = await this.findOne(accountId, id);
+  async softDelete(
+    accountId: string,
+    id: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<Profile> {
+    const profile = await this.findOneOwned(accountId, id, currentUser);
     profile.activo = false;
     return this.profilesRepository.save(profile);
   }
 
-  async reactivate(accountId: string, id: string): Promise<Profile> {
-    const profile = await this.findOne(accountId, id);
+  async reactivate(
+    accountId: string,
+    id: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<Profile> {
+    const profile = await this.findOneOwned(accountId, id, currentUser);
     // Reactivar también puede chocar con el límite de pantallas (si se
     // llegó al máximo con otros perfiles activos mientras este estaba
     // desactivado), así que aplica la misma validación que al crear.

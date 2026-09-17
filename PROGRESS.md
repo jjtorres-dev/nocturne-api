@@ -805,6 +805,92 @@ campo `owner` desde el arranque (no como ajuste posterior).
 - [x] Verificado: lint limpio, 171 tests unitarios y 39 e2e (suite
       completa del repo) en verde, build limpio
 
+## Multi-usuario — Fase B3: Ownership en Cuentas + Perfiles (backend)
+
+Mismo patrón que Servicios/Contactos (Fase B1/B2), con una arista nueva:
+Cuentas referencia Servicio/Proveedor por FK, así que además de "es mío",
+hace falta validar que esas referencias también lo sean. Perfiles no
+recibe columna propia — su scoping deriva siempre de la Cuenta padre.
+
+- [x] Columna `owner_id` (uuid, FK a `users`, `NOT NULL`) agregada a
+      `accounts` — migración `AddAccountOwner`, mismo patrón nullable →
+      backfill (admin más antiguo) → `NOT NULL` → FK. Corrida contra
+      Postgres local; verificado que las 9 cuentas existentes quedaron
+      con el admin como dueño. `profiles` **no** recibe columna nueva,
+      tal como se pidió
+- [x] `AccountsService`: misma separación que Servicios/Contactos —
+      `findOne`/`findAll` sin scope (uso interno de `ProfilesService`,
+      `SalesService`, `AccountingService`) vs. `findOneOwned`/
+      `findAllOwned` (con scope + `owner: {id, name, email}` poblado,
+      solo para el controller). El listado (`findAllOwned`) sigue sin
+      exponer `claveServicio`/`claveCorreo` (Fase 2); el detalle
+      (`findOneOwned`) sí las devuelve, como siempre, ahora sumando el
+      `owner`. **Decisión no pedida explícitamente**: como el `findAll`
+      sin scope no tenía ningún caller interno real (solo lo usaba el
+      controller viejo), se dejó sin `perfilesCount` ni `owner` — toda
+      esa lógica de enriquecimiento vive ahora en `findAllOwned`, el
+      único consumidor real. Se mantiene el método igual por paridad de
+      patrón con Servicios/Contactos, no por necesidad actual
+- [x] `AccountsController` — mismo cambio que Servicios/Contactos: se
+      sacó `RolesGuard`/`@Roles(ADMIN)` de la escritura; ahora un
+      `REVENDEDOR` puede crear/editar/desactivar/reactivar cuentas
+      propias, acotado por ownership
+- [x] **Validación nueva** en `create()`/`update()`
+      (`assertReferencesOwnedBy`): si el body trae `servicioId` y/o
+      `proveedorId`, cada uno tiene que existir Y pertenecer al mismo
+      `owner_id` que la cuenta — en creación, el del usuario
+      autenticado; en edición, el que la cuenta **ya tiene**, sin
+      importar quién esté editando (así el admin puede editar una
+      cuenta ajena sin poder "cruzarle" el catálogo de otro
+      revendedor). No coincide → 404, misma razón que "recurso ajeno"
+- [x] `ProfilesService`: sin columna `ownerId` propia — `create`/
+      `findAllOwned`/`findOneOwned`/`update`/`softDelete`/`reactivate`
+      reciben `currentUser` y arrancan llamando a
+      `accountsService.findOneOwned(accountId, currentUser)`, que ya
+      resuelve el "join" contra `account.owner_id` (404 si la cuenta no
+      existe o es ajena) sin duplicar la lógica de ownership en dos
+      lugares. `findOne(accountId, id)` sin scope se mantiene para el
+      uso interno de `SalesService`. `ProfilesController` — mismo
+      cambio: `RolesGuard`/`@Roles(ADMIN)` fuera de la escritura
+- [x] El límite de `pantallasMax` (Fase 2) no se tocó — sigue operando
+      sobre `accountId`/`servicioId` igual que siempre, verificado con
+      test de regresión explícito
+- [x] Tests unitarios: `accounts.service.spec.ts` (22 tests) — incluye
+      404 al crear/editar referenciando un servicio o proveedor de otro
+      dueño, y el caso específico "el admin edita una cuenta de A
+      poniéndole un servicio de A (OK) vs. uno de B (404), sin importar
+      que quien edita sea el admin". `profiles.service.spec.ts` (13
+      tests) — incluye que `findOneOwned` delega en
+      `accountsService.findOneOwned` y nunca llega a buscar el perfil
+      si la cuenta ya dio 404
+- [x] Test e2e nuevo (`test/accounts-ownership.e2e-spec.ts`, 5 tests,
+      **dos usuarios `REVENDEDOR` reales** con JWT real de punta a
+      punta, `userA`/`userB` y sus Servicios base creados **una sola
+      vez** en `beforeAll` por el mismo motivo de rate limit que
+      Servicios/Contactos): Usuario B da 404 en `GET`/`PATCH`/`DELETE`
+      sobre una Cuenta de Usuario A y nunca la ve en su listado; B da
+      404 en `GET`/`PATCH` de un Perfil dentro de una Cuenta de A (y
+      404 al listar los perfiles de esa cuenta); A intenta crear una
+      Cuenta con un Servicio **o** un Proveedor de B → 404 en ambos
+      casos, confirmado por SQL directo que no quedó ninguna fila
+      creada; el admin reasigna el servicio de una cuenta de A a otro
+      servicio de A (funciona) y luego a uno de B (404, la cuenta sigue
+      con su servicio y dueño anteriores); regresión de `pantallasMax`
+      con un servicio de límite 1 (segundo perfil da 409)
+- [x] Probado manualmente contra el servidor local: 2 revendedores, cada
+      uno con su propio Servicio y Cuenta — listado de cada uno sin la
+      cuenta del otro, 404 en `GET`/`PATCH`/`DELETE` de B sobre la
+      cuenta de A, y el caso específico de A intentando crear una
+      cuenta con el servicio de B → 404 confirmado
+      (`"Servicio ... no encontrado"`). **Nota de la prueba**: el rate
+      limit de login (5/min) se disparó a mitad de la secuencia manual
+      por la cantidad de logins de prueba — se esperó la ventana y se
+      confirmó igual, mismo comportamiento ya cubierto por
+      `test/auth-throttle.e2e-spec.ts`, no es un bug. Datos de prueba
+      borrados después
+- [x] Verificado: lint limpio, 188 tests unitarios y 44 e2e (suite
+      completa del repo) en verde, build limpio
+
 ## Fase 7 — Extras
 
 - [ ] Notificaciones por WhatsApp

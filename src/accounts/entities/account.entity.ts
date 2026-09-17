@@ -11,11 +11,24 @@ import { decimalTransformer } from '../../common/decimal.transformer.js';
 import { encryptedColumnTransformer } from '../../common/encryption/encrypted-column.transformer.js';
 import { Service } from '../../services/entities/service.entity.js';
 import { Contact } from '../../contacts/entities/contact.entity.js';
+import { User } from '../../users/entities/user.entity.js';
 
 @Entity({ name: 'accounts' })
 export class Account {
   @PrimaryGeneratedColumn('uuid')
   id: string;
+
+  // Dueño de la cuenta (Multi-usuario — Fase B3, mismo patrón que
+  // Service.ownerId/Contact.ownerId): un REVENDEDOR solo ve/toca las
+  // suyas, el admin ve todas. Ver AccountsService.findAllOwned/
+  // findOneOwned. servicioId/proveedorId referenciados deben pertenecer a
+  // este mismo owner (ver assertReferencesOwnedBy).
+  @Column({ type: 'uuid', name: 'owner_id' })
+  ownerId: string;
+
+  @ManyToOne(() => User)
+  @JoinColumn({ name: 'owner_id' })
+  owner: User;
 
   @Column({ type: 'uuid', name: 'servicio_id' })
   servicioId: string;
