@@ -1330,6 +1330,72 @@ ya en producción). Vive en el repo `nocturne-web`, no en este.
       loguear como admin → desactivar/reactivar el usuario de prueba y
       confirmar el estado en la lista
 
+## Multi-usuario — Frontend: Mostrar dueño + selector "ver como" (`nocturne-web`)
+
+Cierra el lado visual de las Fases B1-B7 (backend, `owner`/`ownerId` y
+`viewOwnerId` ya en producción): hasta ahora el ownership existía en la
+API pero un ADMIN no tenía forma de ver de quién era cada fila ni de
+mirar la contabilidad de un revendedor puntual.
+
+- [x] Columna "Dueño" (nombre, con el email como tooltip) en las tablas
+      de Servicios, Contactos, Cuentas, Ventas, Combos, Ventas Combo y
+      Gastos — **solo visible para ADMIN**, mismo patrón que ya existía
+      para el link de Usuarios en el sidebar (`computed()` sobre
+      `auth.currentUser()?.role`, no un `*ngIf` estático): un REVENDEDOR
+      nunca ve esta columna porque todo lo que ve ya es suyo, mostrarla
+      sería ruido. En `CuentasList` (la única lista sin columna
+      "acciones") se agregó igual, antes de "Estado"
+- [x] Cabecera de Cuenta detail y Venta Combo detail: fila "Dueño" con el
+      mismo criterio admin-only, apoyada en el `owner` que ya viaja en
+      `GET /accounts/:id` y `GET /combo-sales/:id`
+- [x] Modelos de frontend (`Servicio`, `Contacto`, `Cuenta`,
+      `CuentaListItem`, `Venta`, `Combo`, `VentaCombo`, `Gasto`) ganan un
+      campo `owner: Owner` (`id`/`name`/`email`, tipo nuevo en
+      `shared/owner.model.ts`) — refleja el `owner` que el backend ya
+      agregaba desde las Fases B1-B7, pero que el frontend todavía no
+      tipaba ni consumía
+- [x] Contabilidad — selector "Viendo" arriba de los filtros de fecha,
+      **solo para ADMIN**: "Mi negocio" (default, no manda `viewOwnerId`,
+      así el admin entra viendo lo mismo que vería siendo revendedor),
+      "Todo el negocio" (`viewOwnerId=all`), y un option por cada usuario
+      de `GET /api/users` (`viewOwnerId=<id>`). Cambiar la selección
+      refresca los 4 reportes (`summary`, `by-service`,
+      `by-payment-method`, `timeline`) con el filtro nuevo y sincroniza el
+      query param `viewOwnerId` de la URL (`Router.navigate` con
+      `queryParamsHandling: 'merge'`, sin recargar la página) para que la
+      selección sobreviva un refresh
+- [x] Tests de componente (nuevos, 246 en total en `nocturne-web`): por
+      cada una de las 7 listas y las 2 páginas de detalle, un caso que
+      confirma la columna/fila "Dueño" visible + poblada para un ADMIN
+      simulado y otro que confirma que no existe en absoluto en el DOM
+      (`.mat-column-dueno` / texto "Dueño") para un REVENDEDOR simulado.
+      En Contabilidad: el selector no aparece para REVENDEDOR, un ADMIN
+      lo ve con "Mi negocio" por defecto y dispara `usuariosApi.list()`,
+      cambiar a "Todo el negocio" o a un usuario específico manda las 4
+      llamadas con el `viewOwnerId` correcto, y el valor inicial se lee
+      del query param de la URL (sobrevive un refresh)
+- [x] Verificado: lint limpio, build de producción limpio, 246 tests de
+      componente (`ng test`) en verde
+- [ ] **Verificación visual con Playwright — pendiente, mismo bloqueo que
+      la fase anterior (sandbox sin Chrome/Chromium en Fedora, no vale la
+      pena seguir persiguiendo dependencias del SO)**. Queda pendiente
+      probar a mano (o desde un entorno con Chrome disponible) el flujo
+      completo: loguear como admin → abrir Servicios (o cualquier otra de
+      las 7 listas) y confirmar que la columna "Dueño" aparece poblada
+      con el nombre correcto y el email en el tooltip → abrir el detalle
+      de una Cuenta y de una Venta Combo y confirmar la fila "Dueño" en la
+      cabecera → cerrar sesión y loguear como un `REVENDEDOR` → confirmar
+      que ninguna de las 7 listas ni los 2 detalles muestran la columna o
+      fila "Dueño" → volver a loguear como admin → abrir Contabilidad y
+      confirmar el selector "Viendo" con "Mi negocio" por defecto → elegir
+      "Todo el negocio" y confirmar que los 4 reportes cambian y que la
+      URL agrega `?viewOwnerId=all` → refrescar la página (F5) y confirmar
+      que la selección "Todo el negocio" sigue activa → elegir un
+      revendedor específico por nombre y confirmar que los reportes
+      cambian a los de ese usuario y la URL refleja su id → cerrar sesión
+      y loguear como ese mismo `REVENDEDOR` → confirmar que Contabilidad
+      no muestra el selector "Viendo" en absoluto
+
 ## Fase 7 — Extras
 
 - [ ] Notificaciones por WhatsApp
