@@ -156,28 +156,41 @@ export class ExpensesService {
     return this.expensesRepository.save(expense);
   }
 
-  async sumMontoPEN(desde: string, hasta: string): Promise<number> {
-    const result = await this.expensesRepository
+  // ownerId undefined = sin filtro (vista "todo el negocio" del admin, ver
+  // AccountingService.resolveOwnerId).
+  async sumMontoPEN(
+    desde: string,
+    hasta: string,
+    ownerId?: string,
+  ): Promise<number> {
+    const qb = this.expensesRepository
       .createQueryBuilder('expense')
       .select('COALESCE(SUM(expense.montoPEN), 0)', 'total')
       .where('expense.activo = true')
-      .andWhere('expense.fecha BETWEEN :desde AND :hasta', { desde, hasta })
-      .getRawOne<{ total: string }>();
+      .andWhere('expense.fecha BETWEEN :desde AND :hasta', { desde, hasta });
+    if (ownerId) {
+      qb.andWhere('expense.ownerId = :ownerId', { ownerId });
+    }
+    const result = await qb.getRawOne<{ total: string }>();
     return round2(parseFloat(result?.total ?? '0'));
   }
 
   async sumMontoPENByMetodoPago(
     desde: string,
     hasta: string,
+    ownerId?: string,
   ): Promise<MetodoPagoGasto[]> {
-    const rows = await this.expensesRepository
+    const qb = this.expensesRepository
       .createQueryBuilder('expense')
       .select('expense.metodoPago', 'metodoPago')
       .addSelect('SUM(expense.montoPEN)', 'gastos')
       .where('expense.activo = true')
       .andWhere('expense.fecha BETWEEN :desde AND :hasta', { desde, hasta })
-      .groupBy('expense.metodoPago')
-      .getRawMany<{ metodoPago: string; gastos: string }>();
+      .groupBy('expense.metodoPago');
+    if (ownerId) {
+      qb.andWhere('expense.ownerId = :ownerId', { ownerId });
+    }
+    const rows = await qb.getRawMany<{ metodoPago: string; gastos: string }>();
     return rows.map((row) => ({
       metodoPago: row.metodoPago,
       gastos: round2(parseFloat(row.gastos)),
@@ -190,8 +203,9 @@ export class ExpensesService {
     desde: string,
     hasta: string,
     groupBy: TimelineGroupBy,
+    ownerId?: string,
   ): Promise<PeriodoGasto[]> {
-    const rows = await this.expensesRepository
+    const qb = this.expensesRepository
       .createQueryBuilder('expense')
       .select(
         `to_char(date_trunc('${groupBy}', expense.fecha), 'YYYY-MM-DD')`,
@@ -201,8 +215,11 @@ export class ExpensesService {
       .where('expense.activo = true')
       .andWhere('expense.fecha BETWEEN :desde AND :hasta', { desde, hasta })
       .groupBy('periodo')
-      .orderBy('periodo', 'ASC')
-      .getRawMany<{ periodo: string; gastos: string }>();
+      .orderBy('periodo', 'ASC');
+    if (ownerId) {
+      qb.andWhere('expense.ownerId = :ownerId', { ownerId });
+    }
+    const rows = await qb.getRawMany<{ periodo: string; gastos: string }>();
     return rows.map((row) => ({
       periodo: row.periodo,
       gastos: round2(parseFloat(row.gastos)),

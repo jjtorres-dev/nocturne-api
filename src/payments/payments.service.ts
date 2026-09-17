@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, SelectQueryBuilder } from 'typeorm';
 import { Payment } from './entities/payment.entity.js';
 import type { CreatePaymentInput } from './create-payment.input.js';
 import { round2 } from '../common/round2.js';
@@ -38,27 +38,62 @@ export class PaymentsService {
     return this.paymentsRepository.save(payment);
   }
 
-  async sumMontoPEN(desde: string, hasta: string): Promise<number> {
-    const result = await this.paymentsRepository
+  // ownerId undefined = sin filtro (vista "todo el negocio" del admin, ver
+  // AccountingService.resolveOwnerId). Un Payment no tiene columna
+  // ownerId propia (Fase B7 — ver comentario en la entidad): se filtra vía
+  // sale.ownerId O ventaCombo.ownerId, nunca ambos a la vez (CHECK
+  // constraint de Fase 6 garantiza que solo uno de los dos FK está
+  // poblado). leftJoin a ambas relaciones porque cada Payment usa una sola.
+  private applyOwnerFilter(
+    qb: SelectQueryBuilder<Payment>,
+    ownerId: string | undefined,
+  ): void {
+    if (!ownerId) {
+      return;
+    }
+    qb.leftJoin('payment.venta', 'ownerVenta')
+      .leftJoin('payment.ventaCombo', 'ownerVentaCombo')
+      .andWhere(
+        '(ownerVenta.ownerId = :ownerId OR ownerVentaCombo.ownerId = :ownerId)',
+        { ownerId },
+      );
+  }
+
+  async sumMontoPEN(
+    desde: string,
+    hasta: string,
+    ownerId?: string,
+  ): Promise<number> {
+    const qb = this.paymentsRepository
       .createQueryBuilder('payment')
       .select('COALESCE(SUM(payment.montoPEN), 0)', 'total')
-      .where('payment.fecha BETWEEN :desde AND :hasta', { desde, hasta })
-      .getRawOne<{ total: string }>();
+      .where('payment.fecha BETWEEN :desde AND :hasta', { desde, hasta });
+    this.applyOwnerFilter(qb, ownerId);
+    const result = await qb.getRawOne<{ total: string }>();
     return round2(parseFloat(result?.total ?? '0'));
   }
 
+  // Sin cambios en el join a `venta` (ya existía, innerJoin porque solo las
+  // ventas sueltas tienen un servicioId propio — las de combo no
+  // contribuyen a este desglose, mismo criterio de Fase 6): el filtro de
+  // ownerId acá va directo sobre `venta.ownerId`, sin necesitar
+  // ventaCombo.
   async sumMontoPENByServicio(
     desde: string,
     hasta: string,
+    ownerId?: string,
   ): Promise<ServicioIngreso[]> {
-    const rows = await this.paymentsRepository
+    const qb = this.paymentsRepository
       .createQueryBuilder('payment')
       .innerJoin('payment.venta', 'venta')
       .select('venta.servicioId', 'servicioId')
       .addSelect('SUM(payment.montoPEN)', 'ingresos')
       .where('payment.fecha BETWEEN :desde AND :hasta', { desde, hasta })
-      .groupBy('venta.servicioId')
-      .getRawMany<{ servicioId: string; ingresos: string }>();
+      .groupBy('venta.servicioId');
+    if (ownerId) {
+      qb.andWhere('venta.ownerId = :ownerId', { ownerId });
+    }
+    const rows = await qb.getRawMany<{ servicioId: string; ingresos: string }>();
     return rows.map((row) => ({
       servicioId: row.servicioId,
       ingresos: round2(parseFloat(row.ingresos)),
@@ -68,14 +103,16 @@ export class PaymentsService {
   async sumMontoPENByMetodoPago(
     desde: string,
     hasta: string,
+    ownerId?: string,
   ): Promise<MetodoPagoIngreso[]> {
-    const rows = await this.paymentsRepository
+    const qb = this.paymentsRepository
       .createQueryBuilder('payment')
       .select('payment.metodoPago', 'metodoPago')
       .addSelect('SUM(payment.montoPEN)', 'ingresos')
       .where('payment.fecha BETWEEN :desde AND :hasta', { desde, hasta })
-      .groupBy('payment.metodoPago')
-      .getRawMany<{ metodoPago: string; ingresos: string }>();
+      .groupBy('payment.metodoPago');
+    this.applyOwnerFilter(qb, ownerId);
+    const rows = await qb.getRawMany<{ metodoPago: string; ingresos: string }>();
     return rows.map((row) => ({
       metodoPago: row.metodoPago,
       ingresos: round2(parseFloat(row.ingresos)),
@@ -89,8 +126,9 @@ export class PaymentsService {
     desde: string,
     hasta: string,
     groupBy: TimelineGroupBy,
+    ownerId?: string,
   ): Promise<PeriodoIngreso[]> {
-    const rows = await this.paymentsRepository
+    const qb = this.paymentsRepository
       .createQueryBuilder('payment')
       .select(
         `to_char(date_trunc('${groupBy}', payment.fecha), 'YYYY-MM-DD')`,
@@ -99,8 +137,9 @@ export class PaymentsService {
       .addSelect('SUM(payment.montoPEN)', 'ingresos')
       .where('payment.fecha BETWEEN :desde AND :hasta', { desde, hasta })
       .groupBy('periodo')
-      .orderBy('periodo', 'ASC')
-      .getRawMany<{ periodo: string; ingresos: string }>();
+      .orderBy('periodo', 'ASC');
+    this.applyOwnerFilter(qb, ownerId);
+    const rows = await qb.getRawMany<{ periodo: string; ingresos: string }>();
     return rows.map((row) => ({
       periodo: row.periodo,
       ingresos: round2(parseFloat(row.ingresos)),

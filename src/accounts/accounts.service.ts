@@ -228,23 +228,33 @@ export class AccountsService {
   // compró la cuenta (createdAt), no fechaInicio/fechaFin del período de
   // uso. Incluye cuentas desactivadas a propósito: el costo ya se pagó
   // aunque la cuenta luego se haya dado de baja.
-  async sumCosto(desde: string, hasta: string): Promise<number> {
-    const result = await this.accountsRepository
+  // ownerId undefined = sin filtro (vista "todo el negocio" del admin, ver
+  // AccountingService.resolveOwnerId).
+  async sumCosto(
+    desde: string,
+    hasta: string,
+    ownerId?: string,
+  ): Promise<number> {
+    const qb = this.accountsRepository
       .createQueryBuilder('account')
       .select('COALESCE(SUM(account.costo), 0)', 'total')
       .where('CAST(account.createdAt AS date) BETWEEN :desde AND :hasta', {
         desde,
         hasta,
-      })
-      .getRawOne<{ total: string }>();
+      });
+    if (ownerId) {
+      qb.andWhere('account.ownerId = :ownerId', { ownerId });
+    }
+    const result = await qb.getRawOne<{ total: string }>();
     return round2(parseFloat(result?.total ?? '0'));
   }
 
   async sumCostoByServicio(
     desde: string,
     hasta: string,
+    ownerId?: string,
   ): Promise<ServicioInversion[]> {
-    const rows = await this.accountsRepository
+    const qb = this.accountsRepository
       .createQueryBuilder('account')
       .select('account.servicioId', 'servicioId')
       .addSelect('SUM(account.costo)', 'inversion')
@@ -252,8 +262,11 @@ export class AccountsService {
         desde,
         hasta,
       })
-      .groupBy('account.servicioId')
-      .getRawMany<{ servicioId: string; inversion: string }>();
+      .groupBy('account.servicioId');
+    if (ownerId) {
+      qb.andWhere('account.ownerId = :ownerId', { ownerId });
+    }
+    const rows = await qb.getRawMany<{ servicioId: string; inversion: string }>();
     return rows.map((row) => ({
       servicioId: row.servicioId,
       inversion: round2(parseFloat(row.inversion)),

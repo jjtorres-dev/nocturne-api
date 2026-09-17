@@ -1179,6 +1179,86 @@ referencias cruzadas que validar (a diferencia de Cuentas/Ventas/Combos).
 - [x] Verificado: lint limpio, 241 tests unitarios y 67 e2e (suite
       completa del repo) en verde, build limpio
 
+## Multi-usuario — Fase B7: Ownership en Payment + Contabilidad (backend)
+
+Cierra la nota pendiente de la Fase B5: `Payment` no recibe columna
+`owner_id` propia — su dueño se deriva siempre de `Sale.ownerId` (vía
+`venta_id`) o `VentaCombo.ownerId` (vía `venta_combo_id`), nunca ambos a
+la vez (el `CHECK` constraint de Fase 6 ya lo garantiza). Es el único
+módulo de ownership hasta ahora sin migración propia.
+
+- [x] `PaymentsService`: los 4 métodos de agregación
+      (`sumMontoPEN`/`sumMontoPENByServicio`/`sumMontoPENByMetodoPago`/
+      `sumMontoPENByPeriodo`) reciben un `ownerId?: string` opcional
+      (`undefined` = sin filtro). `sumMontoPEN`/`sumMontoPENByMetodoPago`/
+      `sumMontoPENByPeriodo` agregan un `leftJoin` a `payment.venta` Y a
+      `payment.ventaCombo`, filtrando `(venta.ownerId = :ownerId OR
+      ventaCombo.ownerId = :ownerId)` — un Payment nunca tiene ambas
+      relaciones pobladas, así que el OR nunca "duplica" un pago.
+      `sumMontoPENByServicio` ya hacía `innerJoin('payment.venta', ...)`
+      (los pagos de combo no tienen `servicioId` propio, mismo criterio de
+      Fase 6 — no contribuyen al desglose por servicio); el filtro ahí va
+      directo sobre `venta.ownerId`, sin necesitar `ventaCombo`
+- [x] `AccountsService.sumCosto`/`sumCostoByServicio` y
+      `ExpensesService.sumMontoPEN`/`sumMontoPENByMetodoPago`/
+      `sumMontoPENByPeriodo` — mismo criterio, `ownerId?: string` opcional
+      agregado como `andWhere` directo (`Account`/`Expense` sí tienen
+      `ownerId` propio desde Fase B3/B6)
+- [x] `AccountingService.resolveOwnerId` (privado, nuevo): resuelve el
+      `ownerId` efectivo para los 4 reportes a partir del usuario
+      autenticado y el query param opcional `viewOwnerId` —
+      **REVENDEDOR**: siempre su propio id, `viewOwnerId` se ignora en
+      silencio sin importar el valor (nunca se le confirma ni con un
+      error que la opción existe); **ADMIN sin `viewOwnerId`**: por
+      defecto ve exactamente lo mismo que vería como revendedor (solo lo
+      suyo) — Contabilidad nunca expone el negocio completo por
+      accidente; **ADMIN con `viewOwnerId=<uuid>`**: filtra por ese dueño
+      en vez del propio (vista "ver como", pensada para que el frontend
+      arme un selector con `GET /api/users`, ya existente desde Fase A —
+      no hizo falta ningún endpoint nuevo); **ADMIN con
+      `viewOwnerId=all`**: sin filtro, la vista de "todo el negocio"
+      sumando todos los usuarios
+- [x] `QueryRangeDto` (compartido por los 4 endpoints, `QueryTimelineDto`
+      lo extiende) — `viewOwnerId?: string` opcional, `@IsString()` en vez
+      de `@IsUUID()` porque el literal `"all"` también es un valor válido.
+      `AccountingController` — sin `RolesGuard`/`@Roles`: todo usuario
+      autenticado puede pedir los 4 endpoints, cada uno ve lo que le
+      corresponde según su rol y el `viewOwnerId`, no según un guard
+- [x] Tests unitarios: `accounting.service.spec.ts` (reescrito, 4 nuevos)
+      — cubre las 4 ramas de `resolveOwnerId` explícitamente (REVENDEDOR
+      ignora `viewOwnerId` sin importar el valor incluido `"all"`, ADMIN
+      sin `viewOwnerId` ve solo lo suyo, ADMIN con uuid ve ese dueño,
+      ADMIN con `"all"` no filtra); los tests existentes de composición de
+      los 4 reportes (ganancia/neto/ganancia calculados) se actualizaron
+      para pasar `currentUser` y siguen verdes sin cambios en su lógica
+- [x] Test e2e nuevo (`test/accounting-ownership.e2e-spec.ts`, 10 tests,
+      **dos usuarios `REVENDEDOR` reales + admin** con JWT real de punta a
+      punta, fechas fijas exactas por escenario — mismo criterio que
+      `accounting.e2e-spec.ts`, no por delta): escenario simple (A/B/admin
+      cada uno con su cuenta/venta/gasto) — `summary`/`by-service` de A
+      nunca incluyen los números de B (montos exactos, no solo "distinto
+      de cero"), admin sin `viewOwnerId` ve solo lo suyo, admin con
+      `viewOwnerId=<id de A>` ve exactamente los números de A, admin con
+      `viewOwnerId=all` ve la suma exacta de los 3, y un REVENDEDOR
+      mandando `viewOwnerId` (el propio, el de otro, o `"all"`) siempre ve
+      solo lo suyo en los 3 casos. Escenario con Venta de Combo aparte
+      (fecha distinta, aislado): confirma que `summary` scopea también el
+      ingreso que llega vía `venta_combo_id` (no solo `venta_id`), que
+      `by-service` sigue sin atribuirle ingresos al combo (solo
+      `inversion` por cada cuenta/servicio involucrado, igual que antes de
+      esta fase) sin dejar de estar bien scopeado, y que el admin ve ese
+      mismo combo con `viewOwnerId=<id de A>` y sumado en `viewOwnerId=all`
+- [x] Probado manualmente contra el servidor local: 2 revendedores + admin,
+      cada uno con su propia cuenta/venta/gasto en una fecha fija — los 4
+      escenarios confirmados por número exacto con `curl` (summary de A,
+      de B, de admin sin `viewOwnerId`, admin con `viewOwnerId=<A>`, admin
+      con `viewOwnerId=all` sumando los 3, y A intentando mandar
+      `viewOwnerId` propio/ajeno/`all` sin que cambie nada en su
+      resultado), más `by-service` y `timeline` puntuales. Datos de
+      prueba borrados después
+- [x] Verificado: lint limpio, 245 tests unitarios y 77 e2e (suite
+      completa del repo) en verde, build limpio
+
 ## Fase 7 — Extras
 
 - [ ] Notificaciones por WhatsApp

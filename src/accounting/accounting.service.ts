@@ -10,8 +10,14 @@ import type { AccountingSummary } from './accounting-summary.js';
 import type { ServiceBreakdown } from './service-breakdown.js';
 import type { PaymentMethodBreakdown } from './payment-method-breakdown.js';
 import type { TimelinePoint } from './timeline-point.js';
+import { UserRole } from '../users/user-role.enum.js';
+import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
 
 const GROUP_BY_DEFAULT = TimelineGroupBy.DAY;
+
+// Valor especial de `viewOwnerId` (solo ADMIN): sin filtro de ownerId, la
+// vista de "todo el negocio" sumando todos los usuarios.
+const VIEW_ALL = 'all';
 
 @Injectable()
 export class AccountingService {
@@ -22,12 +28,18 @@ export class AccountingService {
     private readonly servicesService: ServicesService,
   ) {}
 
-  async summary(desdeInput?: string, hastaInput?: string): Promise<AccountingSummary> {
+  async summary(
+    desdeInput: string | undefined,
+    hastaInput: string | undefined,
+    currentUser: AuthenticatedUser,
+    viewOwnerId?: string,
+  ): Promise<AccountingSummary> {
+    const ownerId = this.resolveOwnerId(currentUser, viewOwnerId);
     const { desde, hasta } = resolveRango(desdeInput, hastaInput);
     const [ingresos, inversion, gastos] = await Promise.all([
-      this.paymentsService.sumMontoPEN(desde, hasta),
-      this.accountsService.sumCosto(desde, hasta),
-      this.expensesService.sumMontoPEN(desde, hasta),
+      this.paymentsService.sumMontoPEN(desde, hasta, ownerId),
+      this.accountsService.sumCosto(desde, hasta, ownerId),
+      this.expensesService.sumMontoPEN(desde, hasta, ownerId),
     ]);
     return {
       ingresos,
@@ -38,14 +50,17 @@ export class AccountingService {
   }
 
   async byService(
-    desdeInput?: string,
-    hastaInput?: string,
+    desdeInput: string | undefined,
+    hastaInput: string | undefined,
+    currentUser: AuthenticatedUser,
+    viewOwnerId?: string,
   ): Promise<ServiceBreakdown[]> {
+    const ownerId = this.resolveOwnerId(currentUser, viewOwnerId);
     const { desde, hasta } = resolveRango(desdeInput, hastaInput);
     const [ingresosPorServicio, inversionPorServicio, servicios] =
       await Promise.all([
-        this.paymentsService.sumMontoPENByServicio(desde, hasta),
-        this.accountsService.sumCostoByServicio(desde, hasta),
+        this.paymentsService.sumMontoPENByServicio(desde, hasta, ownerId),
+        this.accountsService.sumCostoByServicio(desde, hasta, ownerId),
         this.servicesService.findAll({}),
       ]);
 
@@ -75,13 +90,16 @@ export class AccountingService {
   }
 
   async byPaymentMethod(
-    desdeInput?: string,
-    hastaInput?: string,
+    desdeInput: string | undefined,
+    hastaInput: string | undefined,
+    currentUser: AuthenticatedUser,
+    viewOwnerId?: string,
   ): Promise<PaymentMethodBreakdown[]> {
+    const ownerId = this.resolveOwnerId(currentUser, viewOwnerId);
     const { desde, hasta } = resolveRango(desdeInput, hastaInput);
     const [ingresosPorMetodo, gastosPorMetodo] = await Promise.all([
-      this.paymentsService.sumMontoPENByMetodoPago(desde, hasta),
-      this.expensesService.sumMontoPENByMetodoPago(desde, hasta),
+      this.paymentsService.sumMontoPENByMetodoPago(desde, hasta, ownerId),
+      this.expensesService.sumMontoPENByMetodoPago(desde, hasta, ownerId),
     ]);
 
     const ingresosByMetodo = new Map(
@@ -108,14 +126,17 @@ export class AccountingService {
   }
 
   async timeline(
-    desdeInput?: string,
-    hastaInput?: string,
+    desdeInput: string | undefined,
+    hastaInput: string | undefined,
+    currentUser: AuthenticatedUser,
     groupBy: TimelineGroupBy = GROUP_BY_DEFAULT,
+    viewOwnerId?: string,
   ): Promise<TimelinePoint[]> {
+    const ownerId = this.resolveOwnerId(currentUser, viewOwnerId);
     const { desde, hasta } = resolveRango(desdeInput, hastaInput);
     const [ingresosPorPeriodo, gastosPorPeriodo] = await Promise.all([
-      this.paymentsService.sumMontoPENByPeriodo(desde, hasta, groupBy),
-      this.expensesService.sumMontoPENByPeriodo(desde, hasta, groupBy),
+      this.paymentsService.sumMontoPENByPeriodo(desde, hasta, groupBy, ownerId),
+      this.expensesService.sumMontoPENByPeriodo(desde, hasta, groupBy, ownerId),
     ]);
 
     const ingresosByPeriodo = new Map(
@@ -138,5 +159,33 @@ export class AccountingService {
         ganancia: round2(ingresos - gastos),
       };
     });
+  }
+
+  // Multi-usuario — Fase B7. Resuelve el ownerId efectivo para los 4
+  // reportes:
+  // - REVENDEDOR: siempre su propio id, sin importar qué mande
+  //   `viewOwnerId` — se ignora en silencio (nunca se le confirma ni con
+  //   un error que la opción existe).
+  // - ADMIN sin `viewOwnerId`: por defecto ve exactamente lo mismo que
+  //   vería como si fuera un revendedor más (solo lo suyo) — Contabilidad
+  //   nunca expone el negocio completo por accidente.
+  // - ADMIN con `viewOwnerId=<uuid>`: filtra por ese dueño en vez del
+  //   propio (vista "ver como").
+  // - ADMIN con `viewOwnerId=all`: sin filtro — la vista de "todo el
+  //   negocio", suma de todos los usuarios.
+  private resolveOwnerId(
+    currentUser: AuthenticatedUser,
+    viewOwnerId: string | undefined,
+  ): string | undefined {
+    if (currentUser.role !== UserRole.ADMIN) {
+      return currentUser.id;
+    }
+    if (!viewOwnerId) {
+      return currentUser.id;
+    }
+    if (viewOwnerId === VIEW_ALL) {
+      return undefined;
+    }
+    return viewOwnerId;
   }
 }

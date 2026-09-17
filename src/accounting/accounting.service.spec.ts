@@ -4,8 +4,23 @@ import type { PaymentsService } from '../payments/payments.service.js';
 import type { ExpensesService } from '../expenses/expenses.service.js';
 import type { AccountsService } from '../accounts/accounts.service.js';
 import type { ServicesService } from '../services/services.service.js';
+import { UserRole } from '../users/user-role.enum.js';
+import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
 
 describe('AccountingService', () => {
+  const admin: AuthenticatedUser = {
+    id: 'admin-1',
+    email: 'admin@nocturne.dev',
+    name: 'Admin',
+    role: UserRole.ADMIN,
+  };
+  const revendedorA: AuthenticatedUser = {
+    id: 'revendedor-a',
+    email: 'a@nocturne.dev',
+    name: 'Revendedor A',
+    role: UserRole.REVENDEDOR,
+  };
+
   let paymentsService: {
     sumMontoPEN: ReturnType<typeof vi.fn>;
     sumMontoPENByServicio: ReturnType<typeof vi.fn>;
@@ -59,7 +74,7 @@ describe('AccountingService', () => {
       accountsService.sumCosto.mockResolvedValue(200);
       expensesService.sumMontoPEN.mockResolvedValue(50);
 
-      const result = await accountingService.summary(DESDE, HASTA);
+      const result = await accountingService.summary(DESDE, HASTA, revendedorA);
 
       expect(result).toEqual({
         ingresos: 500,
@@ -67,9 +82,21 @@ describe('AccountingService', () => {
         gastos: 50,
         ganancia: 250,
       });
-      expect(paymentsService.sumMontoPEN).toHaveBeenCalledWith(DESDE, HASTA);
-      expect(accountsService.sumCosto).toHaveBeenCalledWith(DESDE, HASTA);
-      expect(expensesService.sumMontoPEN).toHaveBeenCalledWith(DESDE, HASTA);
+      expect(paymentsService.sumMontoPEN).toHaveBeenCalledWith(
+        DESDE,
+        HASTA,
+        revendedorA.id,
+      );
+      expect(accountsService.sumCosto).toHaveBeenCalledWith(
+        DESDE,
+        HASTA,
+        revendedorA.id,
+      );
+      expect(expensesService.sumMontoPEN).toHaveBeenCalledWith(
+        DESDE,
+        HASTA,
+        revendedorA.id,
+      );
     });
   });
 
@@ -89,7 +116,7 @@ describe('AccountingService', () => {
         { id: 's3', nombre: 'HBO Max' },
       ]);
 
-      const result = await accountingService.byService(DESDE, HASTA);
+      const result = await accountingService.byService(DESDE, HASTA, revendedorA);
 
       expect(result).toEqual([
         { servicioId: 's1', nombre: 'Netflix', inversion: 100, ingresos: 300, ganancia: 200 },
@@ -110,7 +137,11 @@ describe('AccountingService', () => {
         { metodoPago: 'Transferencia', gastos: 20 },
       ]);
 
-      const result = await accountingService.byPaymentMethod(DESDE, HASTA);
+      const result = await accountingService.byPaymentMethod(
+        DESDE,
+        HASTA,
+        revendedorA,
+      );
 
       expect(result).toEqual([
         { metodoPago: 'Yape', ingresos: 300, gastos: 80, neto: 220 },
@@ -134,6 +165,7 @@ describe('AccountingService', () => {
       const result = await accountingService.timeline(
         DESDE,
         HASTA,
+        revendedorA,
         TimelineGroupBy.DAY,
       );
 
@@ -146,16 +178,63 @@ describe('AccountingService', () => {
         DESDE,
         HASTA,
         TimelineGroupBy.DAY,
+        revendedorA.id,
       );
     });
 
     it('usa groupBy=day por defecto si no se especifica', async () => {
-      await accountingService.timeline(DESDE, HASTA);
+      await accountingService.timeline(DESDE, HASTA, revendedorA);
 
       expect(paymentsService.sumMontoPENByPeriodo).toHaveBeenCalledWith(
         DESDE,
         HASTA,
         TimelineGroupBy.DAY,
+        revendedorA.id,
+      );
+    });
+  });
+
+  describe('resolveOwnerId (scoping, Fase B7)', () => {
+    it('un REVENDEDOR siempre queda acotado a su propio id, ignorando viewOwnerId sin importar el valor', async () => {
+      await accountingService.summary(DESDE, HASTA, revendedorA, 'otro-id');
+      expect(paymentsService.sumMontoPEN).toHaveBeenCalledWith(
+        DESDE,
+        HASTA,
+        revendedorA.id,
+      );
+
+      await accountingService.summary(DESDE, HASTA, revendedorA, 'all');
+      expect(paymentsService.sumMontoPEN).toHaveBeenLastCalledWith(
+        DESDE,
+        HASTA,
+        revendedorA.id,
+      );
+    });
+
+    it('un ADMIN sin viewOwnerId ve solo lo suyo, por defecto', async () => {
+      await accountingService.summary(DESDE, HASTA, admin);
+      expect(paymentsService.sumMontoPEN).toHaveBeenCalledWith(
+        DESDE,
+        HASTA,
+        admin.id,
+      );
+    });
+
+    it('un ADMIN con viewOwnerId=<uuid> ve los números de ese dueño', async () => {
+      await accountingService.summary(DESDE, HASTA, admin, revendedorA.id);
+      expect(paymentsService.sumMontoPEN).toHaveBeenCalledWith(
+        DESDE,
+        HASTA,
+        revendedorA.id,
+      );
+    });
+
+    it('un ADMIN con viewOwnerId=all ve todo, sin filtro de ownerId', async () => {
+      await accountingService.summary(DESDE, HASTA, admin, 'all');
+      expect(paymentsService.sumMontoPEN).toHaveBeenCalledWith(
+        DESDE,
+        HASTA,
+        undefined,
       );
     });
   });
