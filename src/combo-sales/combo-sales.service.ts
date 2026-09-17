@@ -29,6 +29,7 @@ interface AsignacionValidada {
   asignacion: ComboSaleAsignacionDto;
   servicio: Service;
   perfilId: string | null;
+  ownerId: string;
 }
 
 @Injectable()
@@ -81,8 +82,9 @@ export class ComboSalesService {
         });
         const savedCombo = await manager.save(ventaCombo);
 
-        for (const { asignacion, servicio, perfilId } of validadas) {
+        for (const { asignacion, servicio, perfilId, ownerId } of validadas) {
           const child = manager.create(Sale, {
+            ownerId,
             clienteId: dto.clienteId,
             cuentaId: asignacion.cuentaId,
             perfilId,
@@ -366,7 +368,11 @@ export class ComboSalesService {
       }
     }
 
-    return { asignacion, servicio, perfilId };
+    // ComboSales todavía no está scopeado por dueño (fuera de alcance de
+    // Fase B4 — solo "Ventas"/SalesService); las ventas hijas heredan el
+    // ownerId de la Cuenta a la que quedan asignadas, mismo criterio que
+    // SalesService.create() usaría si esto pasara por ahí.
+    return { asignacion, servicio, perfilId, ownerId: cuenta.ownerId };
   }
 
   private async assertAsignacionSigueLibre(

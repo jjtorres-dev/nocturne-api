@@ -14,11 +14,27 @@ import { Profile } from '../../accounts/profiles/entities/profile.entity.js';
 import { Service } from '../../services/entities/service.entity.js';
 import { Moneda } from '../moneda.enum.js';
 import { VentaCombo } from '../../combo-sales/entities/venta-combo.entity.js';
+import { User } from '../../users/entities/user.entity.js';
 
 @Entity({ name: 'sales' })
 export class Sale {
   @PrimaryGeneratedColumn('uuid')
   id: string;
+
+  // Dueño de la venta (Multi-usuario — Fase B4, mismo patrón que
+  // Service/Contact/Account.ownerId): un REVENDEDOR solo ve/toca las
+  // suyas, el admin ve todas. Ver SalesService.findAllOwned/findOneOwned.
+  // clienteId/cuentaId/perfilId/servicioId referenciados deben pertenecer
+  // a este mismo owner (ver assertReferencesOwnedBy). Las ventas hijas de
+  // un combo (ver ventaComboId) también necesitan este campo — como
+  // ComboSalesService no está scopeado por dueño todavía, las crea con el
+  // ownerId de la Cuenta a la que quedan asignadas (ver comentario ahí).
+  @Column({ type: 'uuid', name: 'owner_id' })
+  ownerId: string;
+
+  @ManyToOne(() => User)
+  @JoinColumn({ name: 'owner_id' })
+  owner: User;
 
   @Column({ type: 'uuid', name: 'cliente_id' })
   clienteId: string;

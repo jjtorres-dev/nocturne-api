@@ -891,6 +891,120 @@ recibe columna propia — su scoping deriva siempre de la Cuenta padre.
 - [x] Verificado: lint limpio, 188 tests unitarios y 44 e2e (suite
       completa del repo) en verde, build limpio
 
+## Multi-usuario — Fase B4: Ownership en Ventas (backend)
+
+Mismo patrón que Servicios/Contactos/Cuentas (Fase B1/B2/B3), extendido a
+las 4 referencias de una Venta y a endpoints más allá del CRUD básico
+(vencimiento, summary, renew). El módulo con más superficie hasta ahora.
+
+- [x] Columna `owner_id` (uuid, FK a `users`, `NOT NULL`) agregada a
+      `sales` — migración `AddSaleOwner`, mismo patrón nullable →
+      backfill (admin más antiguo) → `NOT NULL` → FK. Corrida contra
+      Postgres local; verificado que las 19 ventas existentes quedaron
+      con el admin como dueño
+- [x] **Bug potencial encontrado y corregido antes de que llegara a
+      romper nada**: `ComboSalesService.create()` inserta las "ventas
+      hijas" del combo directo en `sales` vía `manager.create(Sale,
+      {...})`, dentro de su propia transacción — sin este fix, la
+      primera venta de combo creada después de la migración habría
+      violado el `NOT NULL` de `owner_id` y roto `POST
+      /api/combo-sales` (y varios tests e2e de Combos) en producción.
+      **Decisión no pedida explícitamente pero necesaria**: como
+      ComboSales no está scopeado por dueño todavía (fuera de alcance
+      de esta fase — el pedido fue específicamente "Ventas"), las
+      ventas hijas heredan el `ownerId` de la Cuenta a la que quedan
+      asignadas (ya validada dentro de `validarAsignacion`), mismo
+      criterio que usaría `SalesService.create()` si el flujo pasara
+      por ahí. Verificado que los 44 tests e2e existentes (incluidos
+      los de Combos) siguen en verde con este fix
+- [x] `SalesService`: misma separación que los módulos anteriores —
+      `findOne`/`findAll`/`summary` sin scope (uso interno; a diferencia
+      de Servicios/Contactos/Cuentas, hoy no tienen ningún caller real,
+      se mantienen solo por paridad de patrón) vs. `findOneOwned`/
+      `findAllOwned`/`summaryOwned` (con scope + `owner` poblado, para
+      el controller)
+- [x] `SalesController` — mismo cambio: se sacó `RolesGuard`/
+      `@Roles(ADMIN)` de la escritura (incluido `POST /:id/renew`); un
+      `REVENDEDOR` puede crear/editar/desactivar/reactivar/renovar
+      ventas propias, acotado por ownership
+- [x] `assertReferencesOwnedBy` extendida a las 4 referencias
+      (`clienteId`, `cuentaId`, `servicioId` derivado, `perfilId` si
+      viene): en creación, cada una debe pertenecer al usuario
+      autenticado. **Aclaración importante sobre las 4**:
+      `UpdateSaleDto` no permite reasignar clienteId/cuentaId/perfilId
+      (decisión ya tomada en Fase 3 — reasignar implica desactivar y
+      crear de nuevo), así que a diferencia de Cuentas, en `update()`
+      no hay nada que revalidar por esa vía; el 404 sobre una venta
+      ajena en `update()` ya lo cubre `findOneOwned`. Y `servicioId` no
+      viene en el body — se deriva de `cuenta.servicioId` — así que por
+      el invariante que ya garantiza `AccountsService.
+      assertReferencesOwnedBy` (Fase B3), una cuenta **siempre** tiene
+      un servicio del mismo dueño: ese chequeo es defensivo (no
+      alcanzable con datos reales vía la API), verificado con
+      repositorio mockeado en el test unitario, no con un escenario e2e
+      (documentado en el propio archivo de test para que quede claro
+      por qué)
+- [x] Scoping extendido a **todos** los endpoints de lectura, no solo el
+      CRUD: `findAllOwned` filtra por `ownerId` tanto en el camino
+      simple (`find()`) como en el de `vencimiento` (`QueryBuilder`,
+      `andWhere('sale.ownerId = :ownerId', ...)` + `leftJoin` con
+      `owner` restringido a id/name/email); `summaryOwned` aplica el
+      mismo filtro a los 3 conteos (`vencidas`/`porVencer`/`alDia`). Un
+      `ADMIN` no tiene filtro en ninguno de los dos
+- [x] **La exclusividad (`assertPerfilLibre`/`assertCuentaLibre`) se
+      dejó deliberadamente sin scope de ownership** — sigue mirando
+      toda la tabla `sales` sin filtrar por dueño, tal como pedía la
+      tarea ("el admin no debería poder saltarse la exclusividad de un
+      perfil ajeno"): un perfil ocupado por la venta de otro usuario
+      sigue "ocupado" para cualquiera que pregunte, admin incluido.
+      Verificado con test unitario (mock) y test e2e real (el admin
+      intenta reactivar una venta cuyo perfil ya fue reocupado por otra
+      venta → 409, no 200 ni 404)
+- [x] Tests unitarios (`sales.service.spec.ts`, reescrito, 54 tests):
+      todo lo anterior (Fase 3) sigue verde + 404 en las 4 referencias
+      ajenas al crear (incluido el caso defensivo de `servicioId`), 404
+      en `findOneOwned`/`update`/`softDelete`/`reactivate`/`renew`
+      sobre venta ajena, `findAllOwned`/`summaryOwned` acotando por
+      `ownerId` (con y sin `vencimiento`) solo para `REVENDEDOR`, y el
+      caso de exclusividad "sin importar quién pregunta" con mock
+- [x] Test e2e nuevo (`test/sales-ownership.e2e-spec.ts`, 8 tests, **dos
+      usuarios `REVENDEDOR` reales** con JWT real de punta a punta,
+      fixtures base — Contacto/Servicio/Cuenta/Perfil de cada uno —
+      creadas **una sola vez** en `beforeAll`): los 3 casos base (`GET`/
+      `PATCH`/`DELETE` ajeno → 404, listado nunca lo incluye), `POST
+      /:id/renew` ajeno → 404, crear venta con `clienteId` ajeno → 404,
+      con `cuentaId` ajena → 404, con `perfilId` de la cuenta de otro
+      dueño → 404 (perfil que no pertenece a la cuenta indicada, mismo
+      motivo por el que ya daba 404 antes de esta fase, ahora también
+      cubre "ajeno"), `GET /sales?vencimiento=vencida` y `GET
+      /sales/summary` de A nunca reflejan datos de B, la exclusividad
+      del admin descrita arriba, y que el admin ve las ventas de ambos
+      con `owner` poblado
+- [x] Probado manualmente contra el servidor local: 2 revendedores, cada
+      uno con su Contacto/Servicio/Cuenta/Perfil propios — A crea su
+      venta (`V-00557`), confirmado 404 al intentar crear con el
+      `clienteId` o la `cuentaId` de B, listado/`GET`/`PATCH`/`DELETE`
+      de B sobre la venta de A dan 404 (o no la incluyen), y `summary`
+      de cada uno refleja solo sus propias ventas vencidas. Mismo rate
+      limit de login que en Fase B3 a mitad de la prueba — mismo
+      comportamiento esperado, se esperó la ventana. Datos de prueba
+      borrados después
+- [x] Verificado: lint limpio, 208 tests unitarios y 52 e2e (suite
+      completa del repo) en verde, build limpio
+
+### Nota para Fase de Contabilidad (Payment) — no implementado todavía
+
+Cuando llegue el turno de scopear Contabilidad/`Payment` por dueño: **no
+agregar una columna `owner_id` a `payments`**. El dueño de un `Payment` se
+deriva siempre de la `Sale` o `VentaCombo` a la que pertenece (`ventaId`
+XOR `ventaComboId`, ya es today un invariante reforzado con un `CHECK`
+en DB desde Fase 6), mismo criterio que Perfiles con Cuentas en Fase B3
+(scoping vía join al padre, sin columna propia). Como `VentaCombo` todavía
+no tiene su propio `ownerId` (ComboSales quedó fuera de alcance en Fase
+B4, ver nota más arriba), scopear `Payment` por dueño probablemente
+implica scopear `ComboSalesService`/`VentaCombo` primero — evaluar ese
+orden cuando se llegue a esta fase, no ahora.
+
 ## Fase 7 — Extras
 
 - [ ] Notificaciones por WhatsApp

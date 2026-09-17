@@ -23,8 +23,43 @@ import { PaymentsService } from '../payments/payments.service.js';
 import { PaymentType } from '../payments/payment-type.enum.js';
 import type { RenewSaleDto } from './dto/renew-sale.dto.js';
 import { generateCodigoVenta } from './codigo-venta.util.js';
+import { UserRole } from '../users/user-role.enum.js';
+import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
 
 const DIAS_ALERTA_DEFAULT = 3;
+
+// Solo id/name/email del dueño en el join, nunca el resto de User (ni por
+// accidente el password_hash) — mismo criterio que Servicios/Contactos/
+// Cuentas.
+const OWNER_SELECT = {
+  id: true,
+  name: true,
+  email: true,
+} as const;
+
+const OWNED_SELECT = {
+  id: true,
+  ownerId: true,
+  clienteId: true,
+  cuentaId: true,
+  perfilId: true,
+  servicioId: true,
+  codigoVenta: true,
+  duracionMeses: true,
+  fechaInicio: true,
+  fechaFin: true,
+  precio: true,
+  moneda: true,
+  tasaCambio: true,
+  precioPEN: true,
+  metodoPago: true,
+  renovacionAutomatica: true,
+  activo: true,
+  ventaComboId: true,
+  createdAt: true,
+  updatedAt: true,
+  owner: OWNER_SELECT,
+} as const;
 
 @Injectable()
 export class SalesService {
@@ -38,10 +73,15 @@ export class SalesService {
     private readonly paymentsService: PaymentsService,
   ) {}
 
-  async create(dto: CreateSaleDto): Promise<Sale> {
-    await this.contactsService.findOne(dto.clienteId);
-    const cuenta = await this.accountsService.findOne(dto.cuentaId);
-    const servicio = await this.servicesService.findOne(cuenta.servicioId);
+  async create(
+    dto: CreateSaleDto,
+    currentUser: AuthenticatedUser,
+  ): Promise<Sale> {
+    const { cuenta, servicio } = await this.assertReferencesOwnedBy(
+      dto.clienteId,
+      dto.cuentaId,
+      currentUser.id,
+    );
     const requierePerfil =
       servicio.tipo === ServiceType.CON_PERFILES ||
       servicio.tipo === ServiceType.FAMILIAR;
@@ -53,7 +93,9 @@ export class SalesService {
           `El servicio "${servicio.nombre}" requiere seleccionar un perfil.`,
         );
       }
-      // También valida que el perfil pertenezca a esta cuenta (404 si no).
+      // También valida que el perfil pertenezca a esta cuenta (404 si no) —
+      // y, por transitividad (la cuenta ya se validó arriba), que sea del
+      // mismo dueño: un perfil siempre pertenece a la cuenta de su dueño.
       await this.profilesService.findOne(dto.cuentaId, perfilId);
       await this.assertPerfilLibre(perfilId);
     } else {
@@ -68,6 +110,7 @@ export class SalesService {
     const tasaCambio = dto.tasaCambio ?? 1;
     const sale = this.salesRepository.create({
       ...dto,
+      ownerId: currentUser.id,
       perfilId,
       servicioId: cuenta.servicioId,
       duracionMeses: servicio.duracionMeses,
@@ -101,6 +144,10 @@ export class SalesService {
     return saved;
   }
 
+  // Sin scope de ownership: no tiene caller interno hoy (a diferencia de
+  // Servicios/Contactos/Cuentas), se mantiene por paridad de patrón. Nunca
+  // exponer este método (ni findOne) directo en el controller — ver
+  // findAllOwned/findOneOwned para eso.
   findAll(query: QuerySaleDto): Promise<Sale[]> {
     if (query.vencimiento) {
       return this.findAllByVencimiento(query);
@@ -128,9 +175,93 @@ export class SalesService {
     return { vencidas, porVencer, alDia };
   }
 
+  // Punto de entrada para el controller: un REVENDEDOR SIEMPRE queda
+  // acotado a lo suyo acá, en TODOS los endpoints de lectura (incluidos
+  // vencimiento/summary), sin depender de que el cliente mande el filtro
+  // correcto — la seguridad vive en el backend.
+  findAllOwned(
+    query: QuerySaleDto,
+    currentUser: AuthenticatedUser,
+  ): Promise<Sale[]> {
+    const ownerId =
+      currentUser.role === UserRole.REVENDEDOR ? currentUser.id : undefined;
+    if (query.vencimiento) {
+      return this.findAllByVencimientoOwned(query, ownerId);
+    }
+    const where: Partial<
+      Pick<Sale, 'clienteId' | 'servicioId' | 'activo' | 'ownerId'>
+    > = {};
+    if (query.clienteId) {
+      where.clienteId = query.clienteId;
+    }
+    if (query.servicioId) {
+      where.servicioId = query.servicioId;
+    }
+    if (query.activo !== undefined) {
+      where.activo = query.activo;
+    }
+    if (ownerId) {
+      where.ownerId = ownerId;
+    }
+    return this.salesRepository.find({
+      where,
+      relations: { owner: true },
+      select: OWNED_SELECT,
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  summaryOwned(
+    diasAlerta: number | undefined,
+    currentUser: AuthenticatedUser,
+  ): Promise<SalesSummary> {
+    const ownerId =
+      currentUser.role === UserRole.REVENDEDOR ? currentUser.id : undefined;
+    return this.summaryFor(diasAlerta ?? DIAS_ALERTA_DEFAULT, ownerId);
+  }
+
+  private async summaryFor(
+    diasAlerta: number,
+    ownerId: string | undefined,
+  ): Promise<SalesSummary> {
+    const [vencidas, porVencer, alDia] = await Promise.all([
+      this.countByVencimiento(VencimientoFiltro.VENCIDA, diasAlerta, ownerId),
+      this.countByVencimiento(
+        VencimientoFiltro.POR_VENCER,
+        diasAlerta,
+        ownerId,
+      ),
+      this.countByVencimiento(VencimientoFiltro.AL_DIA, diasAlerta, ownerId),
+    ]);
+    return { vencidas, porVencer, alDia };
+  }
+
   // vencimiento se calcula siempre sobre ventas activas (ver PROGRESS.md);
   // por eso acá se ignora a propósito query.activo en vez de combinarlo.
   private findAllByVencimiento(query: QuerySaleDto): Promise<Sale[]> {
+    const qb = this.buildVencimientoQuery(query);
+    return qb.orderBy('sale.createdAt', 'DESC').getMany();
+  }
+
+  // Misma query que findAllByVencimiento, sumando el filtro de ownerId (si
+  // aplica) y el join restringido a id/name/email del dueño.
+  private findAllByVencimientoOwned(
+    query: QuerySaleDto,
+    ownerId: string | undefined,
+  ): Promise<Sale[]> {
+    const qb = this.buildVencimientoQuery(query);
+    if (ownerId) {
+      qb.andWhere('sale.ownerId = :ownerId', { ownerId });
+    }
+    qb.leftJoin('sale.owner', 'owner').addSelect([
+      'owner.id',
+      'owner.name',
+      'owner.email',
+    ]);
+    return qb.orderBy('sale.createdAt', 'DESC').getMany();
+  }
+
+  private buildVencimientoQuery(query: QuerySaleDto): SelectQueryBuilder<Sale> {
     const diasAlerta = query.diasAlerta ?? DIAS_ALERTA_DEFAULT;
     const qb = this.salesRepository
       .createQueryBuilder('sale')
@@ -148,17 +279,20 @@ export class SalesService {
     }
 
     this.applyVencimientoCondition(qb, query.vencimiento!, diasAlerta);
-
-    return qb.orderBy('sale.createdAt', 'DESC').getMany();
+    return qb;
   }
 
   private countByVencimiento(
     vencimiento: VencimientoFiltro,
     diasAlerta: number,
+    ownerId?: string,
   ): Promise<number> {
     const qb = this.salesRepository
       .createQueryBuilder('sale')
       .where('sale.activo = :activo', { activo: true });
+    if (ownerId) {
+      qb.andWhere('sale.ownerId = :ownerId', { ownerId });
+    }
     this.applyVencimientoCondition(qb, vencimiento, diasAlerta);
     return qb.getCount();
   }
@@ -198,8 +332,37 @@ export class SalesService {
     return sale;
   }
 
-  async update(id: string, dto: UpdateSaleDto): Promise<Sale> {
-    const sale = await this.findOne(id);
+  // Un REVENDEDOR pidiendo una venta ajena recibe 404, no 403: no hay que
+  // confirmarle que el recurso existe si no es suyo.
+  async findOneOwned(
+    id: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<Sale> {
+    const sale = await this.salesRepository.findOne({
+      where: { id },
+      relations: { owner: true },
+      select: OWNED_SELECT,
+    });
+    if (
+      !sale ||
+      (currentUser.role === UserRole.REVENDEDOR &&
+        sale.ownerId !== currentUser.id)
+    ) {
+      throw new NotFoundException(`Venta ${id} no encontrada`);
+    }
+    return sale;
+  }
+
+  async update(
+    id: string,
+    dto: UpdateSaleDto,
+    currentUser: AuthenticatedUser,
+  ): Promise<Sale> {
+    // UpdateSaleDto no permite reasignar clienteId/cuentaId/perfilId (ver
+    // el comentario en el DTO), así que no hay referencias que revalidar
+    // acá — a diferencia de Cuentas, donde servicioId/proveedorId sí son
+    // editables. findOneOwned ya cubre el 404 si la venta es ajena.
+    const sale = await this.findOneOwned(id, currentUser);
     // Ver nota en ServicesService.update: nunca Object.assign(entity, dto).
     const updatePayload: Partial<Sale> = { ...dto };
     if (dto.precio !== undefined || dto.tasaCambio !== undefined) {
@@ -208,11 +371,11 @@ export class SalesService {
       updatePayload.precioPEN = round2(precio * tasaCambio);
     }
     await this.salesRepository.update(id, updatePayload);
-    return this.findOne(id);
+    return this.findOneOwned(id, currentUser);
   }
 
-  async softDelete(id: string): Promise<Sale> {
-    const sale = await this.findOne(id);
+  async softDelete(id: string, currentUser: AuthenticatedUser): Promise<Sale> {
+    const sale = await this.findOneOwned(id, currentUser);
     this.assertNoPerteneceAUnCombo(sale);
     sale.activo = false;
     const saved = await this.salesRepository.save(sale);
@@ -220,9 +383,13 @@ export class SalesService {
     return saved;
   }
 
-  async reactivate(id: string): Promise<Sale> {
-    const sale = await this.findOne(id);
+  async reactivate(id: string, currentUser: AuthenticatedUser): Promise<Sale> {
+    const sale = await this.findOneOwned(id, currentUser);
     this.assertNoPerteneceAUnCombo(sale);
+    // La exclusividad (assertPerfilLibre/assertCuentaLibre) mira TODA la
+    // tabla `sales`, sin filtrar por dueño: un perfil/cuenta ocupado por la
+    // venta de otro usuario sigue estando ocupado para cualquiera, admin
+    // incluido — nadie se "salta" la exclusividad por ser admin.
     if (sale.perfilId) {
       await this.assertPerfilLibre(sale.perfilId);
     } else {
@@ -234,8 +401,12 @@ export class SalesService {
     return saved;
   }
 
-  async renew(id: string, dto: RenewSaleDto = {}): Promise<Sale> {
-    const sale = await this.findOne(id);
+  async renew(
+    id: string,
+    dto: RenewSaleDto = {},
+    currentUser: AuthenticatedUser,
+  ): Promise<Sale> {
+    const sale = await this.findOneOwned(id, currentUser);
     this.assertNoPerteneceAUnCombo(sale);
     const fechaFin = addMonthsToDate(sale.fechaFin, sale.duracionMeses);
     const precio = dto.precio ?? sale.precio;
@@ -262,7 +433,7 @@ export class SalesService {
       tipo: PaymentType.RENOVACION,
     });
 
-    return this.findOne(id);
+    return this.findOneOwned(id, currentUser);
   }
 
   private async liberar(sale: Sale): Promise<void> {
@@ -320,5 +491,40 @@ export class SalesService {
         `La venta ${sale.codigoVenta} pertenece al combo (ventaComboId=${sale.ventaComboId}); se gestiona desde /api/combo-sales, no directamente.`,
       );
     }
+  }
+
+  // Verifica que clienteId/cuentaId (y, por la cuenta, servicioId) existan
+  // Y pertenezcan al `ownerId` dado. No coincide → 404, misma razón que
+  // "recurso ajeno" (mismo criterio que Cuentas — ver
+  // AccountsService.assertReferencesOwnedBy). Devuelve la cuenta ya
+  // validada para que create() no tenga que volver a pedirla.
+  private async assertReferencesOwnedBy(
+    clienteId: string,
+    cuentaId: string,
+    ownerId: string,
+  ): Promise<{
+    cuenta: Awaited<ReturnType<AccountsService['findOne']>>;
+    servicio: Awaited<ReturnType<ServicesService['findOne']>>;
+  }> {
+    const cliente = await this.contactsService.findOne(clienteId);
+    if (cliente.ownerId !== ownerId) {
+      throw new NotFoundException(`Contacto ${clienteId} no encontrado`);
+    }
+    const cuenta = await this.accountsService.findOne(cuentaId);
+    if (cuenta.ownerId !== ownerId) {
+      throw new NotFoundException(`Cuenta ${cuentaId} no encontrada`);
+    }
+    // Defensivo: por invariante de Fase B3 (AccountsService.
+    // assertReferencesOwnedBy), el servicio de una cuenta SIEMPRE
+    // pertenece al mismo dueño que la cuenta — así que esto no debería
+    // poder fallar nunca en la práctica llegando por la API real. Se
+    // valida explícitamente igual porque servicioId es una de las 4
+    // referencias pedidas, y porque no cuesta nada mantenerlo si ese
+    // invariante alguna vez se rompe en otro lado.
+    const servicio = await this.servicesService.findOne(cuenta.servicioId);
+    if (servicio.ownerId !== ownerId) {
+      throw new NotFoundException(`Servicio ${cuenta.servicioId} no encontrado`);
+    }
+    return { cuenta, servicio };
   }
 }
