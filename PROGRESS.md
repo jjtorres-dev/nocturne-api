@@ -1740,5 +1740,35 @@ ningún otro módulo.
       su lógica. `npm run lint`/`build`/`test` (264 tests) siguen en verde
 - [x] Verificado: `npm run lint`, `npm run build` y `npm test` (249
       tests, +4) pasan en `nocturne-api`
-- [ ] Revisión del usuario antes de comitear (dos repos: `nocturne-web` y
-      `nocturne-api`)
+- [x] Revisión del usuario — aprobada y commiteada en ambos repos:
+      `9ec0526`/`b1b63f3` en `nocturne-web`, `5ef6116` en `nocturne-api`
+
+## Rediseño visual — Login (`nocturne-web`) — ✅ completa, commiteada y pusheada a `origin/main` (2026-09-18)
+
+Sigue el mismo sistema de diseño de las Fases 1-2 (`login.ts`/`.html`/
+`.scss`, sin tocar lógica de auth). Dos commits:
+
+- [x] `6d491fa` — fondo con glow decorativo (dos manchas grandes
+      desenfocadas, azul y verde-turquesa, en diagonal, opacidad baja,
+      detrás de la tarjeta); wordmark "Nocturne" grande arriba del
+      formulario con el degradado en el texto (mismo `background-clip:
+      text` del sidebar); ícono de luna (`bedtime`, sin estrellas/nubes)
+      junto al wordmark; tarjeta con `--nc-surface-elevated` (la misma
+      superficie que los diálogos); el botón "Ingresar" no se tocó —
+      ya heredaba el degradado + glow global de Fase 1 al ser
+      `mat-flat-button color="primary"`. Mensaje de "sesión expirada"
+      verificado sin cambiarlo (~6.1:1 de contraste sobre la superficie
+      nueva)
+- [x] `ff0bfa1` — **bug encontrado tras el commit anterior**: el
+      wordmark se veía cortado abajo. Causa: `.brand-text` heredaba el
+      `line-height` chico y fijo de `--mat-sys-body-medium` (pensado
+      para texto de 0.875rem), que a 2.5rem de font-size quedaba
+      recortado contra el `overflow: hidden` de `.login-page` (necesario
+      para contener el glow). `.login-page` no tiene altura fija —
+      usa `min-height: 100vh` — así que no se le quitó el
+      `overflow: hidden`. Fix: `line-height: 1.35` explícito en
+      `.brand-text` + `padding-bottom: 4px` en `.login-brand` como
+      margen de seguridad extra para el recorte típico de
+      `background-clip: text`
+- [x] Verificado: `npm run lint`, `npm run build` y `npm test` (264
+      tests, sin cambios) pasan en `nocturne-web` en los dos commits
