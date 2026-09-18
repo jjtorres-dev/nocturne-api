@@ -1479,3 +1479,146 @@ Fase 0 en vez de agregar una feature nueva.
       fallidos consecutivos desde la misma IP terminan en 429) y logout
       (revoca, el refresh token ya no sirve). `ACCESS_TOKEN_EXPIRES_IN`
       restaurado a `15m` en `.env` después de la prueba
+
+## Rediseño visual — Fase 1: Sistema de diseño + layout compartido (`nocturne-web`) — ✅ completa, commiteada y pusheada a `origin/main` (2026-09-17)
+
+Cambio puramente visual, sin tocar lógica ni endpoints. Todo vive en
+`nocturne-web/src/styles.scss` (única hoja de estilos global, ver
+`angular.json`) más el layout compartido
+(`src/app/layout/admin-layout/`). Las pantallas individuales (Servicios,
+Ventas, etc.) no se tocaron — heredan lo de abajo automáticamente vía los
+system-tokens de Material y las reglas globales de botones/tarjetas/tablas.
+**No commiteado todavía** — a la espera de que se revise visualmente.
+
+- [x] Tokens de fondo (azul-marino oscuro, 3 niveles) en `:root` de
+      `styles.scss`:
+      - `--nc-bg: #0a0e17` (fondo base — body, sidenav, header)
+      - `--nc-surface: #131826` (tarjetas, un tono más claro)
+      - `--nc-surface-elevated: #1c2333` (hover / superficies elevadas:
+        menús, sidebar item activo)
+      - `--nc-border: #232b40` (borde sutil de tarjetas/sidebar/header)
+- [x] Tokens de texto (nunca blanco/negro puro):
+      - `--nc-text-primary: #e6e9f0`
+      - `--nc-text-secondary: #94a3b8`
+- [x] Tokens de acento (degradado azul eléctrico → verde-turquesa):
+      - `--nc-accent-blue: #3b82f6`, `--nc-accent-cyan: #06b6d4`,
+        `--nc-accent-green: #10b981`
+      - `--nc-gradient-primary: linear-gradient(135deg, #3b82f6 0%, #06b6d4 50%, #10b981 100%)`
+        — fondo de botones primarios, glow del sidebar activo, wordmark
+      - `--nc-accent-solid: #14b8a6` — color intermedio sólido (texto/
+        íconos donde no aplica un degradado); es el valor detrás de
+        `--mat-sys-primary`
+      - `--nc-glow-primary` — `box-shadow` de glow sutil para hover
+- [x] Tipografía: Inter (400/500/600/700) vía Google Fonts
+      (`src/index.html`) + `typography: Inter` en el `mat.theme()` de
+      `styles.scss`, reemplazando Roboto. JetBrains Mono (400/500)
+      importada e importada como token `--nc-font-mono` — **definida pero
+      sin aplicar todavía**: los códigos de venta/combo (V-00001,
+      C-00001) viven en pantallas individuales (Ventas, Combos), así que
+      su propagación queda para la Fase 2
+- [x] **Decisión de diseño — qué tokens M3 se remapean y cuáles no**: los
+      colores de estado Activo/Inactivo (mat-chip con/sin `highlighted`,
+      salen de `--mat-sys-secondary-container`/`on-secondary-container`),
+      Vencida (`--mat-sys-error`) y Por vencer (`#b8860b` hardcodeado en
+      `dashboard.scss`) dependen de tokens que **no se tocaron a
+      propósito**: `--mat-sys-secondary*`, `--mat-sys-tertiary*` y
+      `--mat-sys-error*` quedan exactamente como los generaba el
+      `mat.theme()` original. Solo se remapearon superficie/fondo/texto
+      neutro y `--mat-sys-primary*` (que antes ya alimentaba "Al día" en
+      el dashboard y no es uno de los 4 estados protegidos)
+- [x] Sidebar (`admin-layout.scss`/`.html`): fondo oscuro (hereda de
+      `--mat-sys-surface`), wordmark "Nocturne" con el degradado aplicado
+      al texto (`background-clip: text`), item activo con superficie
+      elevada + barra de acento con glow en vez del
+      `--mat-sys-secondary-container` que traía por defecto (ese token no
+      se tocó para no afectar los chips de Activo/Inactivo). El header
+      dejó de forzar `color="primary"` (barra sólida azul) y ahora usa la
+      misma superficie oscura con un borde inferior sutil, para no
+      desentonar con el resto
+- [x] Botones primarios (`mat-flat-button`/`mat-raised-button`
+      `color="primary"`): fondo con `--nc-gradient-primary` + glow sutil
+      (`--nc-glow-primary`) en hover, regla global en `styles.scss`
+- [x] Tarjetas (`mat-card`, global): borde sutil (`--nc-border`) + sombra
+      suave; el fondo ya sale de `--mat-sys-surface-container-low`
+      remapeado — cubre las tarjetas de Dashboard y Contabilidad sin
+      tocar esos archivos
+- [x] Tablas (global): encabezados en `--nc-text-secondary` (más
+      discretos) y hover sutil en filas (`--nc-surface-elevated`)
+- [x] Verificado: `npm run lint`, `npm run build` y `npm test` (246 tests)
+      pasan en `nocturne-web` sin cambios
+- [x] Revisión visual del usuario — aprobada, ver commit `cd5280c` en
+      `nocturne-web`
+- [x] Fase 2: propagar a pantallas individuales — ver sección siguiente
+
+## Rediseño visual — Fase 2: Detalles por pantalla (`nocturne-web`) — ✅ completa, commiteada y pusheada a `origin/main` (2026-09-18)
+
+Sigue siendo puramente visual. Toca pantallas individuales puntuales (lo
+que la Fase 1 dejó explícitamente para después) más un par de componentes
+compartidos. **No commiteado todavía** — a la espera de revisión.
+
+- [x] `--nc-font-mono` (definida en Fase 1, sin usar) aplicada vía una
+      clase utilitaria global nueva, `.nc-code` (en `styles.scss`), a los 5
+      lugares donde se muestra `codigoVenta` (V-00001 / C-00001):
+      `ventas-list.html`, `venta-combos-list.html`,
+      `venta-combo-detail.html` (título), `venta-edit-dialog.html` y
+      `venta-combo-edit-dialog.html` (títulos de diálogo)
+- [x] Modales de crear/editar: el fondo ya salía oscuro desde la Fase 1
+      (`--mat-sys-surface`, no había ningún gris de Material por defecto
+      colgado), pero usaba el mismo tono que el fondo de la página en vez
+      de leerse como una superficie elevada. Se agregó en `styles.scss`:
+      `--mat-dialog-container-color: var(--nc-surface-elevated)` +
+      borde sutil en `.mat-mdc-dialog-surface` — cubre los 10 diálogos
+      (`mat-dialog-title`) de Servicios, Contactos, Cuentas, Perfiles,
+      Ventas, Ventas Combo, Gastos, Combos, Usuarios y el
+      `confirm-dialog` compartido, sin tocarlos uno por uno
+- [x] Botones "Mostrar"/"Copiar" de credenciales (`app-secret-value`,
+      compartido, usado en Cuentas y Perfiles): no eran chips, son
+      `mat-button` de texto plano — ya tomaban el acento sólido
+      (`--mat-sys-primary` = `--nc-accent-solid`) automáticamente desde la
+      Fase 1. Se les dio forma de pastilla sutil
+      (`background: var(--nc-surface-elevated)`, `border-radius: 999px`)
+      para que se lean como controles secundarios y no compitan con el
+      degradado de los botones primarios reales. El texto del secreto
+      (`•••••••`/valor) pasa de `monospace` genérico a `--nc-font-mono`
+- [x] Gráfico de línea de tiempo en Contabilidad (Chart.js,
+      `accounting-chart.util.ts` + `accounting.ts`): los datasets
+      (Ingresos/Gastos/Ganancia) usaban colores default de Material 2
+      (`#2e7d32`/`#c62828`/`#1565c0`) que desentonaban con el tema oscuro.
+      Se cambiaron a `#10b981`/`#ef4444`/`#3b82f6` (verde-turquesa, rojo,
+      azul — de la misma familia del degradado de acento). Ejes, grid,
+      leyenda y tooltip también se oscurecieron (`#94a3b8` texto de eje,
+      `#e6e9f0` texto de leyenda/tooltip, fondo de tooltip
+      `#1c2333`, grid `rgba(255,255,255,0.06)`). Chart.js pinta en
+      `<canvas>`, así que no puede tomar `var(--mat-sys-*)` directo — son
+      los mismos valores hex que los tokens de `styles.scss`, hardcodeados
+      con comentario de a qué token corresponden
+- [x] **Los 4 estados (Activo/Inactivo/Vencida/Por vencer) — verificados,
+      sin cambiar el color de ninguno**: gracias a `color-scheme: dark` en
+      `body` (Fase 1), Material resuelve sus propios `light-dark(...)`
+      internos al valor de modo oscuro automáticamente, así que
+      `--mat-sys-error` (Vencida) y `--mat-sys-secondary-container`
+      (Activo, chip con `highlighted`) ya salían con las variantes
+      correctas para fondo oscuro sin que nadie las tocara — contraste
+      calculado a mano: Vencida `#ffb4ab` sobre `#0a0e17` ≈ 11.4:1, chip
+      Activo `#dae2f9` sobre `#3e4759` ≈ 7.2:1, Por vencer (hardcodeado
+      `#b8860b` en `dashboard.scss`) sobre `#0a0e17` ≈ 5.9:1. La única
+      excepción real: Inactivo (`mat-chip` sin `highlighted`, texto en
+      `on-surface-variant` con `opacity: 0.7` vía `.chip-inactive`) caía a
+      ≈3.8:1, por debajo del 4.5:1 de WCAG AA para texto normal. Se subió
+      la opacidad a `0.8` (≈4.9:1) — se toca la opacidad, no el color en
+      sí, y de paso se centralizó `.chip-inactive` (estaba duplicado
+      literal en 10 archivos `*-list.scss`/`*-detail.scss`) en una única
+      regla global en `styles.scss`
+- [x] Favicon: reemplazado el ícono default de Angular por un
+      `public/favicon.svg` propio (círculo `--nc-bg` con 🌙), con el
+      `.ico` original como `rel="alternate icon"` de respaldo
+- [x] Verificado: `npm run lint`, `npm run build` y `npm test` (246 tests,
+      sin cambios) pasan en `nocturne-web`
+- [x] Revisión visual del usuario — aprobada, ver commit `8a3b02f` en
+      `nocturne-web`
+
+**Rediseño visual completo (Fase 1 + Fase 2).** Sistema de diseño oscuro
+(azul-marino + degradado azul→verde-turquesa, tipografía Inter/JetBrains
+Mono) propagado a layout compartido, componentes de Material (botones,
+tarjetas, tablas, diálogos) y el detalle puntual de cada pantalla. Sin
+cambios de lógica ni de endpoints en ningún momento de las dos fases.
