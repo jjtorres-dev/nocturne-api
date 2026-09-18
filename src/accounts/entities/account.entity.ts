@@ -60,9 +60,10 @@ export class Account {
   @Column({
     type: 'varchar',
     name: 'clave_servicio',
+    nullable: true,
     transformer: encryptedColumnTransformer,
   })
-  claveServicio: string;
+  claveServicio: string | null;
 
   @Column({
     type: 'varchar',

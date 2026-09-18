@@ -25,9 +25,11 @@ export class CreateAccountDto {
   @IsEmail()
   correo: string;
 
+  // Opcional: hay proveedores que solo dan un código, sin contraseña.
+  @IsOptional()
   @IsString()
   @MinLength(1)
-  claveServicio: string;
+  claveServicio?: string;
 
   @IsOptional()
   @IsString()

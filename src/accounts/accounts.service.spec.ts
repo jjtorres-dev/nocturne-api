@@ -142,6 +142,25 @@ describe('AccountsService', () => {
       });
     });
 
+    it('crea la cuenta sin claveServicio si no se envía (proveedor que solo da un código, sin clave)', async () => {
+      const dto = {
+        servicioId: 'service-1',
+        correo: 'a@b.com',
+        fechaInicio: '2026-01-01',
+        fechaFin: '2026-02-01',
+        costo: 10,
+        metodoPago: 'transferencia',
+      };
+
+      const result = await accountsService.create(dto, revendedorA);
+
+      expect(accountsRepo.create).toHaveBeenCalledWith({
+        ...dto,
+        ownerId: revendedorA.id,
+      });
+      expect(result.claveServicio).toBeUndefined();
+    });
+
     it('valida también el proveedor si se envía', async () => {
       const dto = {
         servicioId: 'service-1',
