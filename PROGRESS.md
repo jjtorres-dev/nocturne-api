@@ -1622,3 +1622,123 @@ compartidos. **No commiteado todavía** — a la espera de revisión.
 Mono) propagado a layout compartido, componentes de Material (botones,
 tarjetas, tablas, diálogos) y el detalle puntual de cada pantalla. Sin
 cambios de lógica ni de endpoints en ningún momento de las dos fases.
+
+## Fix — Feedback real de un revendedor sobre Ventas y Cuentas (`nocturne-web` + `nocturne-api`) — 🚧 en progreso, pendiente de revisión (2026-09-18)
+
+Empezó como frontend puro en `nocturne-web`, terminó necesitando un fix
+chico en `nocturne-api` (ver más abajo). Todo probado contra el backend
+local (Postgres vía `docker-compose`, `npm run start:dev`, usuario admin
+seed). **No commiteado todavía en ninguno de los dos repos** — a la
+espera de revisión.
+
+- [x] Cuentas (`cuenta-form-dialog.ts`): al elegir el Servicio,
+      autocompleta `fechaFin` (`fechaInicio` + `servicio.duracionMeses`,
+      util nueva `shared/fecha.util.ts::sumarMeses`) y `costo`
+      (`servicio.precioBase`). Ambos campos siguen editables — el
+      autocompletado solo corre por `valueChanges` de `servicioId` y
+      `fechaInicio`, así que no pisa una edición manual salvo que se
+      vuelva a tocar el servicio o la fecha de inicio. No dispara en modo
+      edición mientras no se toque nada (`valueChanges` no emite por el
+      valor inicial del form)
+- [x] Ventas (`venta-create-dialog.ts`): mismo autocompletado de
+      `fechaFin`, pero usando la duración del **servicio de la cuenta
+      elegida** (`cuenta.servicioId` → `servicio.duracionMeses`), en
+      `onCuentaChange` + `valueChanges` de `fechaInicio`
+- [x] Ventas (`venta-create-dialog.ts`) y Ventas Combo
+      (`venta-combo-create.ts`): el selector de Cliente ahora filtra
+      `tipo: CLIENTE_FINAL` en `contactosApi.list(...)` — antes traía
+      todos los contactos sin distinguir (de ahí que un revendedor viera
+      sus propios proveedores mezclados en el selector de cliente de una
+      venta). Aunque el pedido original solo mencionaba Ventas, Ventas
+      Combo tenía exactamente el mismo bug y comparte el flujo de
+      "+ Nuevo cliente" del punto siguiente, así que se corrigió en
+      ambos
+- [x] "+ Nuevo cliente" en Ventas y Ventas Combo: opción sentinel al
+      final del selector de Cliente que abre
+      `shared/cliente-quick-create-dialog/` (componente compartido
+      nuevo) — modal chico con solo Nombre y WhatsApp, crea el contacto
+      con `tipo: CLIENTE_FINAL` vía `POST /api/contacts` y lo selecciona
+      automáticamente. El diálogo padre (venta) no se cierra ni pierde
+      lo ya llenado: el nuevo contacto se agrega al signal `clientes()`
+      en memoria en vez de recargar la lista completa. Si se cancela,
+      vuelve al cliente que estaba seleccionado antes (nunca se deja el
+      sentinel "seleccionado")
+- [x] `claveServicio` en `cuenta-form-dialog.ts` (`nocturne-web`) pasa a
+      ser opcional tanto al crear como al editar una Cuenta — el caso
+      real es justo al crear (proveedor que solo da un código, sin
+      contraseña). **Primer intento (corregido después)**: se asumió que
+      el backend ya soportaba esto al crear porque `update-account.dto.ts`
+      ya tenía `claveServicio` opcional; un `curl` contra el backend local
+      probando `POST /api/accounts` sin el campo devolvió **400** — el
+      soporte real solo existía para editar, no para crear. Ver el fix de
+      backend más abajo
+- [x] Tests de componente nuevos (17 en total): autocompletado de
+      fechaFin/costo en `cuenta-form-dialog.spec.ts` (incluye que no
+      dispara en edición sin tocar nada, y que sigue editable a mano);
+      autocompletado de fechaFin por cuenta en
+      `venta-create-dialog.spec.ts`; filtro `CLIENTE_FINAL` en ambos
+      specs de creación de venta; flujo completo de "+ Nuevo cliente"
+      (crea, selecciona, no pierde el resto del formulario; cancelar
+      vuelve al cliente anterior) en ambos; `claveServicio` opcional en
+      edición; 4 tests nuevos para `ClienteQuickCreateDialog` y 3 para
+      `sumarMeses`
+- [x] Probado contra el backend local: login admin seed, `GET
+      /api/contacts?tipo=CLIENTE_FINAL&activo=true` (excluye
+      proveedores), `POST /api/contacts` con el payload exacto del modal
+      chico, `GET /api/services` y `GET /api/accounts?servicioId=...`
+      (confirma los nombres de campo `duracionMeses`/`precioBase`/
+      `servicioId` que usa el autocompletado), y el `PATCH` de
+      `claveServicio` opcional. No se pudo probar con navegador real en
+      este entorno (sin Chrome/Chromium con permisos para instalarlo sin
+      contraseña) — verificación manual fue a nivel de contrato HTTP, no
+      de UI renderizada
+- [x] Verificado: `npm run lint`, `npm run build` y `npm test` (264
+      tests) pasan en `nocturne-web`
+- [ ] Revisión visual/funcional del usuario en el navegador (recomendado
+      antes de comitear, dado que no se pudo probar UI en este entorno)
+
+### Backend — `claveServicio` opcional en Cuentas de verdad (`nocturne-api`)
+
+Corrige el 400 real encontrado arriba. Alcance acotado a
+`claveServicio`/Cuentas — no toca `claveCorreo` (ya era opcional) ni
+ningún otro módulo.
+
+- [x] Migración `MakeClaveServicioOptional` (generada con
+      `npm run migration:generate` y limpiada a mano — el generador
+      también proponía el mismo ruido de siempre en este repo: 3 FK de
+      `owner_id` con nombre de constraint autogenerado en vez del
+      explícito, y el DROP+ADD de `CHK_payments_venta_xor_combo`, ver
+      nota de Fase de Contabilidad; se descartó todo lo que no fuera la
+      columna): `ALTER TABLE accounts ALTER COLUMN clave_servicio DROP
+      NOT NULL`. Sin backfill — ya hay cuentas con valor, la migración
+      solo permite que las nuevas lleguen en null. Corrida contra
+      Postgres local
+- [x] `create-account.dto.ts`: `claveServicio` con `@IsOptional()`
+      agregado (se mantienen `@IsString()`/`@MinLength(1)` para cuando sí
+      se manda). `update-account.dto.ts` no se tocó — ya la tenía opcional
+- [x] `account.entity.ts`: columna `clave_servicio` con `nullable: true`,
+      tipo `claveServicio: string | null` (antes `string`)
+- [x] `encrypted-column.transformer.ts`: **no necesitó cambios** — ya
+      manejaba `null`/`undefined` sin cifrar/descifrar (se escribió así
+      desde el principio porque lo comparte `claveCorreo`, que ya era
+      nullable). Se le agregó `encrypted-column.transformer.spec.ts`
+      (spec nuevo, no existía ninguno) para dejarlo cubierto: cifra/
+      descifra un valor real de ida y vuelta, y deja pasar `null`/
+      `undefined` sin tocarlos ni al guardar ni al leer
+- [x] Tests nuevos (4 en total): unit test en `accounts.service.spec.ts`
+      — crea la cuenta sin `claveServicio` si no se envía; 3 en
+      `encrypted-column.transformer.spec.ts` (arriba)
+- [x] Probado a mano con `curl` contra el backend local: `POST
+      /api/accounts` sin `claveServicio` → **201**, `claveServicio: null`
+      en la respuesta; `GET /api/accounts/:id` del detalle de esa misma
+      cuenta → **200**, sin reventar al "descifrar" el `null`. Cuenta de
+      prueba desactivada después (`DELETE /api/accounts/:id`) para no
+      dejar basura en la base local
+- [x] `nocturne-web`: `Cuenta.claveServicio` actualizado a `string | null`
+      (antes `string`) para que el tipo no mienta — `app-secret-value` ya
+      manejaba `null` correctamente (`@if (value())`), no hubo que tocar
+      su lógica. `npm run lint`/`build`/`test` (264 tests) siguen en verde
+- [x] Verificado: `npm run lint`, `npm run build` y `npm test` (249
+      tests, +4) pasan en `nocturne-api`
+- [ ] Revisión del usuario antes de comitear (dos repos: `nocturne-web` y
+      `nocturne-api`)
