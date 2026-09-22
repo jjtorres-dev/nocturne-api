@@ -1,5 +1,5 @@
 import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import type { Repository } from 'typeorm';
+import type { EntityManager, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { UsersService } from './users.service.js';
 import { User } from './entities/user.entity.js';
@@ -179,6 +179,40 @@ describe('UsersService', () => {
       repo.findOne.mockResolvedValue(null);
 
       await expect(usersService.reactivate('no-existe')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('hashPassword / updatePasswordHash', () => {
+    it('hashPassword devuelve un hash bcrypt que no es la contraseña en texto plano', async () => {
+      const hash = await usersService.hashPassword('nueva-clave-123');
+
+      expect(hash).not.toContain('nueva-clave-123');
+      expect(await bcrypt.compare('nueva-clave-123', hash)).toBe(true);
+    });
+
+    it('updatePasswordHash sin manager actualiza solo password_hash con el repositorio inyectado', async () => {
+      await usersService.updatePasswordHash('user-1', 'hash-nuevo');
+
+      expect(repo.update).toHaveBeenCalledWith('user-1', {
+        passwordHash: 'hash-nuevo',
+      });
+    });
+
+    it('updatePasswordHash con manager corre en esa transacción y no toca el repositorio inyectado', async () => {
+      const txRepo = { update: vi.fn().mockResolvedValue({ affected: 1 }) };
+      const manager = { getRepository: vi.fn().mockReturnValue(txRepo) };
+
+      await usersService.updatePasswordHash(
+        'user-1',
+        'hash-nuevo',
+        manager as unknown as EntityManager,
+      );
+
+      expect(manager.getRepository).toHaveBeenCalledWith(User);
+      expect(txRepo.update).toHaveBeenCalledWith('user-1', {
+        passwordHash: 'hash-nuevo',
+      });
+      expect(repo.update).not.toHaveBeenCalled();
     });
   });
 });

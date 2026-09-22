@@ -4,7 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import ms from 'ms';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { RefreshToken } from './refresh-token.entity.js';
 
 const SESSION_EXPIRED_MESSAGE = 'Sesión expirada, inicia sesión de nuevo';
@@ -64,6 +64,20 @@ export class RefreshTokensService {
     }
     record.revoked = true;
     await this.refreshTokensRepository.save(record);
+  }
+
+  // Revoca todos los refresh tokens vigentes del usuario (todas sus sesiones).
+  // Los access tokens ya emitidos siguen valiendo hasta que expiran (son
+  // stateless), pero ninguna sesión puede renovarse.
+  // Con `manager` corre dentro de esa transacción; sin él, con el repositorio.
+  async revokeAllForUser(
+    userId: string,
+    manager?: EntityManager,
+  ): Promise<void> {
+    const repository = manager
+      ? manager.getRepository(RefreshToken)
+      : this.refreshTokensRepository;
+    await repository.update({ userId, revoked: false }, { revoked: true });
   }
 
   private async find(rawToken: string): Promise<RefreshToken | null> {

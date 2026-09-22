@@ -1,8 +1,8 @@
 import { UnauthorizedException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
-import type { Repository } from 'typeorm';
+import type { EntityManager, Repository } from 'typeorm';
 import { RefreshTokensService } from './refresh-tokens.service.js';
-import type { RefreshToken } from './refresh-token.entity.js';
+import { RefreshToken } from './refresh-token.entity.js';
 import type { ConfigService } from '@nestjs/config';
 
 describe('RefreshTokensService', () => {
@@ -10,6 +10,7 @@ describe('RefreshTokensService', () => {
     create: ReturnType<typeof vi.fn>;
     save: ReturnType<typeof vi.fn>;
     findOne: ReturnType<typeof vi.fn>;
+    update: ReturnType<typeof vi.fn>;
   };
   let configService: { getOrThrow: ReturnType<typeof vi.fn> };
   let service: RefreshTokensService;
@@ -22,6 +23,7 @@ describe('RefreshTokensService', () => {
         ...entity,
       })),
       findOne: vi.fn(),
+      update: vi.fn().mockResolvedValue({ affected: 0 }),
     };
     configService = {
       getOrThrow: vi.fn().mockReturnValue('30d'),
@@ -165,6 +167,35 @@ describe('RefreshTokensService', () => {
         service.revoke('11111111-1111-4111-8111-111111111111:algun-secreto'),
       ).resolves.toBeUndefined();
       expect(repo.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('revokeAllForUser', () => {
+    it('revoca todos los refresh tokens vigentes del usuario, y solo los suyos', async () => {
+      await service.revokeAllForUser('user-1');
+
+      expect(repo.update).toHaveBeenCalledTimes(1);
+      expect(repo.update).toHaveBeenCalledWith(
+        { userId: 'user-1', revoked: false },
+        { revoked: true },
+      );
+    });
+
+    it('con un EntityManager corre dentro de esa transacción y no usa el repositorio inyectado', async () => {
+      const txRepo = { update: vi.fn().mockResolvedValue({ affected: 2 }) };
+      const manager = { getRepository: vi.fn().mockReturnValue(txRepo) };
+
+      await service.revokeAllForUser(
+        'user-1',
+        manager as unknown as EntityManager,
+      );
+
+      expect(manager.getRepository).toHaveBeenCalledWith(RefreshToken);
+      expect(txRepo.update).toHaveBeenCalledWith(
+        { userId: 'user-1', revoked: false },
+        { revoked: true },
+      );
+      expect(repo.update).not.toHaveBeenCalled();
     });
   });
 });

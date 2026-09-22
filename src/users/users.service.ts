@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { User } from './entities/user.entity.js';
 import { UserRole } from './user-role.enum.js';
@@ -120,6 +120,25 @@ export class UsersService {
       passwordHash,
     });
     return this.findOne(id);
+  }
+
+  // Hasheo (CPU) separado del guardado para poder hacerlo antes de abrir una
+  // transacción, en vez de mantenerla abierta mientras corre bcrypt.
+  hashPassword(password: string): Promise<string> {
+    return bcrypt.hash(password, BCRYPT_ROUNDS);
+  }
+
+  // Cambia solo el hash de la contraseña (nunca se expone en PublicUser).
+  // Con `manager` corre dentro de esa transacción; sin él, con el repositorio.
+  async updatePasswordHash(
+    id: string,
+    passwordHash: string,
+    manager?: EntityManager,
+  ): Promise<void> {
+    const repository = manager
+      ? manager.getRepository(User)
+      : this.usersRepository;
+    await repository.update(id, { passwordHash });
   }
 
   async softDelete(id: string, currentUserId: string): Promise<PublicUser> {

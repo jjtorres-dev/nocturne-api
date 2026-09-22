@@ -102,6 +102,20 @@ Excel usada previamente para llevar el negocio.
      -d '{"refreshToken":"<refreshToken>"}'
    ```
 
+   Para cambiar tu propia contraseña (cualquier usuario autenticado, no solo
+   admin). Si `currentPassword` no coincide da `400`; si coincide, guarda la
+   nueva y **revoca todos tus refresh tokens** (todas las sesiones, incluida
+   la actual), así que hay que volver a iniciar sesión. Ambas cosas van en
+   una sola transacción (o se aplican las dos o ninguna) y el endpoint tiene
+   el mismo límite que login: 5 intentos por minuto por IP (`429`):
+
+   ```bash
+   curl -X PATCH http://localhost:3000/api/auth/change-password \
+     -H "Authorization: Bearer <accessToken>" \
+     -H "Content-Type: application/json" \
+     -d '{"currentPassword":"<actual>","newPassword":"<nueva, mín. 8 caracteres>"}'
+   ```
+
    `POST /api/auth/login` tiene un límite de 5 intentos por minuto por IP
    (`429` con mensaje claro si se supera) — ver la sección de Seguridad en
    `PROGRESS.md`.

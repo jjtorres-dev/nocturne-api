@@ -1,6 +1,8 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service.js';
+import { ChangePasswordThrottlerGuard } from './change-password-throttler.guard.js';
+import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
 import { JwtAuthGuard } from './jwt-auth.guard.js';
@@ -38,6 +40,26 @@ export class AuthController {
   async logout(@Body() refreshTokenDto: RefreshTokenDto) {
     await this.authService.logout(refreshTokenDto.refreshToken);
     return { message: 'Sesión cerrada' };
+  }
+
+  // Solo JwtAuthGuard (sin @Roles): cualquier usuario logueado cambia la suya.
+  // Mismo límite que login (5 intentos por minuto por IP), porque acepta la
+  // contraseña actual y se podría usar para probar contraseñas con un access
+  // token robado. JwtAuthGuard va primero: solo las requests autenticadas
+  // consumen cupo, así que tráfico anónimo no puede agotar el de nadie.
+  @UseGuards(JwtAuthGuard, ChangePasswordThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Patch('change-password')
+  async changePassword(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() changePasswordDto: ChangePasswordDto,
+  ) {
+    await this.authService.changePassword(
+      user.id,
+      changePasswordDto.currentPassword,
+      changePasswordDto.newPassword,
+    );
+    return { message: 'Contraseña actualizada' };
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
