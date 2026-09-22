@@ -7,7 +7,7 @@ import { UpdateContactDto } from './dto/update-contact.dto.js';
 import { QueryContactDto } from './dto/query-contact.dto.js';
 import { UserRole } from '../users/user-role.enum.js';
 import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
-import type { SearchResultItem } from '../common/search-result.js';
+import { resolveOwnerName, type SearchResultItem } from '../common/search-result.js';
 
 // Se agrega siempre a las respuestas de findOneOwned/findAllOwned (admin o
 // REVENDEDOR, sin condicional por rol): solo id/name/email del dueño, nunca
@@ -129,9 +129,15 @@ export class ContactsService {
       .limit(5);
     if (currentUser.role === UserRole.REVENDEDOR) {
       qb.andWhere('contact.ownerId = :ownerId', { ownerId: currentUser.id });
+    } else {
+      qb.leftJoin('contact.owner', 'owner').addSelect(['owner.name']);
     }
     const contacts = await qb.getMany();
-    return contacts.map((c) => ({ id: c.id, label: c.nombre }));
+    return contacts.map((c) => ({
+      id: c.id,
+      label: c.nombre,
+      ownerName: resolveOwnerName(c.owner?.name, currentUser),
+    }));
   }
 
   async update(

@@ -7,7 +7,7 @@ import { UpdateServiceDto } from './dto/update-service.dto.js';
 import { QueryServiceDto } from './dto/query-service.dto.js';
 import { UserRole } from '../users/user-role.enum.js';
 import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
-import type { SearchResultItem } from '../common/search-result.js';
+import { resolveOwnerName, type SearchResultItem } from '../common/search-result.js';
 
 // Se agrega siempre a las respuestas de findOneOwned/findAllOwned (admin o
 // REVENDEDOR, sin condicional por rol): solo id/name/email del dueño, nunca
@@ -132,9 +132,15 @@ export class ServicesService {
       .limit(5);
     if (currentUser.role === UserRole.REVENDEDOR) {
       qb.andWhere('service.ownerId = :ownerId', { ownerId: currentUser.id });
+    } else {
+      qb.leftJoin('service.owner', 'owner').addSelect(['owner.name']);
     }
     const services = await qb.getMany();
-    return services.map((s) => ({ id: s.id, label: s.nombre }));
+    return services.map((s) => ({
+      id: s.id,
+      label: s.nombre,
+      ownerName: resolveOwnerName(s.owner?.name, currentUser),
+    }));
   }
 
   async update(

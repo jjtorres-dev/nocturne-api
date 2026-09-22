@@ -26,7 +26,7 @@ import { addMonthsToDate, todayIso } from '../sales/date.util.js';
 import { round2 } from '../common/round2.js';
 import { UserRole } from '../users/user-role.enum.js';
 import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
-import type { SearchResultItem } from '../common/search-result.js';
+import { resolveOwnerName, type SearchResultItem } from '../common/search-result.js';
 
 interface AsignacionValidada {
   asignacion: ComboSaleAsignacionDto;
@@ -292,9 +292,15 @@ export class ComboSalesService {
       .limit(5);
     if (currentUser.role === UserRole.REVENDEDOR) {
       qb.andWhere('ventaCombo.ownerId = :ownerId', { ownerId: currentUser.id });
+    } else {
+      qb.leftJoin('ventaCombo.owner', 'owner').addSelect(['owner.name']);
     }
     const ventasCombo = await qb.getMany();
-    return ventasCombo.map((v) => ({ id: v.id, label: v.codigoVenta }));
+    return ventasCombo.map((v) => ({
+      id: v.id,
+      label: v.codigoVenta,
+      ownerName: resolveOwnerName(v.owner?.name, currentUser),
+    }));
   }
 
   async update(

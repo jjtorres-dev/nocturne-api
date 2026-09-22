@@ -470,4 +470,29 @@ describe('Search — ownership entre usuarios (e2e)', () => {
     expect(ids).toContain(contactoA.id);
     expect(ids).toContain(contactoB.id);
   });
+
+  it('el resultado trae ownerName como campo aparte, y SOLO cuando busca el admin', async () => {
+    const term = `zzowner${randomUUID().slice(0, 8)}`;
+    const contactoA = await createContact(userA.accessToken, `Cliente ${term} A`);
+
+    const resAdmin = await request(app.getHttpServer())
+      .get(`/api/search?q=${term}`)
+      .set('Authorization', `Bearer ${adminAccessToken}`)
+      .expect(200);
+    const encontradoAdmin = resAdmin.body.contactos.find(
+      (r: { id: string }) => r.id === contactoA.id,
+    );
+    expect(encontradoAdmin.label).toBe(`Cliente ${term} A`);
+    expect(encontradoAdmin.ownerName).toBe(userA.name);
+
+    const resA = await request(app.getHttpServer())
+      .get(`/api/search?q=${term}`)
+      .set('Authorization', `Bearer ${userA.accessToken}`)
+      .expect(200);
+    const encontradoA = resA.body.contactos.find(
+      (r: { id: string }) => r.id === contactoA.id,
+    );
+    expect(encontradoA.label).toBe(`Cliente ${term} A`);
+    expect(encontradoA.ownerName).toBeUndefined();
+  });
 });

@@ -12,7 +12,7 @@ import { ContactsService } from '../contacts/contacts.service.js';
 import { round2 } from '../common/round2.js';
 import { UserRole } from '../users/user-role.enum.js';
 import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
-import type { SearchResultItem } from '../common/search-result.js';
+import { resolveOwnerName, type SearchResultItem } from '../common/search-result.js';
 
 export interface ServicioInversion {
   servicioId: string;
@@ -206,11 +206,14 @@ export class AccountsService {
       .limit(5);
     if (currentUser.role === UserRole.REVENDEDOR) {
       qb.andWhere('account.ownerId = :ownerId', { ownerId: currentUser.id });
+    } else {
+      qb.leftJoin('account.owner', 'owner').addSelect(['owner.name']);
     }
     const accounts = await qb.getMany();
     return accounts.map((a) => ({
       id: a.id,
       label: `${a.correo} — ${a.servicio?.nombre ?? '—'}`,
+      ownerName: resolveOwnerName(a.owner?.name, currentUser),
     }));
   }
 

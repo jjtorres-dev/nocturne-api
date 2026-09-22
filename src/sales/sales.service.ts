@@ -25,7 +25,7 @@ import type { RenewSaleDto } from './dto/renew-sale.dto.js';
 import { generateCodigoVenta } from './codigo-venta.util.js';
 import { UserRole } from '../users/user-role.enum.js';
 import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
-import type { SearchResultItem } from '../common/search-result.js';
+import { resolveOwnerName, type SearchResultItem } from '../common/search-result.js';
 
 const DIAS_ALERTA_DEFAULT = 3;
 
@@ -369,9 +369,15 @@ export class SalesService {
       .limit(5);
     if (currentUser.role === UserRole.REVENDEDOR) {
       qb.andWhere('sale.ownerId = :ownerId', { ownerId: currentUser.id });
+    } else {
+      qb.leftJoin('sale.owner', 'owner').addSelect(['owner.name']);
     }
     const sales = await qb.getMany();
-    return sales.map((s) => ({ id: s.id, label: s.codigoVenta }));
+    return sales.map((s) => ({
+      id: s.id,
+      label: s.codigoVenta,
+      ownerName: resolveOwnerName(s.owner?.name, currentUser),
+    }));
   }
 
   async update(

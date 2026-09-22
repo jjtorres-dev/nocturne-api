@@ -9,7 +9,7 @@ import { round2 } from '../common/round2.js';
 import { TimelineGroupBy } from '../common/timeline-group-by.enum.js';
 import { UserRole } from '../users/user-role.enum.js';
 import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
-import type { SearchResultItem } from '../common/search-result.js';
+import { resolveOwnerName, type SearchResultItem } from '../common/search-result.js';
 
 export interface MetodoPagoGasto {
   metodoPago: string;
@@ -143,9 +143,15 @@ export class ExpensesService {
       .limit(5);
     if (currentUser.role === UserRole.REVENDEDOR) {
       qb.andWhere('expense.ownerId = :ownerId', { ownerId: currentUser.id });
+    } else {
+      qb.leftJoin('expense.owner', 'owner').addSelect(['owner.name']);
     }
     const expenses = await qb.getMany();
-    return expenses.map((e) => ({ id: e.id, label: e.descripcion }));
+    return expenses.map((e) => ({
+      id: e.id,
+      label: e.descripcion,
+      ownerName: resolveOwnerName(e.owner?.name, currentUser),
+    }));
   }
 
   async update(

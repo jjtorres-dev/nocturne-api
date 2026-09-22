@@ -9,7 +9,7 @@ import { ServicesService } from '../services/services.service.js';
 import { Service } from '../services/entities/service.entity.js';
 import { UserRole } from '../users/user-role.enum.js';
 import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
-import type { SearchResultItem } from '../common/search-result.js';
+import { resolveOwnerName, type SearchResultItem } from '../common/search-result.js';
 
 // Se agrega siempre a las respuestas de findOneOwned/findAllOwned (admin o
 // REVENDEDOR, sin condicional por rol): solo id/name/email del dueño, nunca
@@ -138,9 +138,15 @@ export class CombosService {
       .limit(5);
     if (currentUser.role === UserRole.REVENDEDOR) {
       qb.andWhere('combo.ownerId = :ownerId', { ownerId: currentUser.id });
+    } else {
+      qb.leftJoin('combo.owner', 'owner').addSelect(['owner.name']);
     }
     const combos = await qb.getMany();
-    return combos.map((c) => ({ id: c.id, label: c.nombre }));
+    return combos.map((c) => ({
+      id: c.id,
+      label: c.nombre,
+      ownerName: resolveOwnerName(c.owner?.name, currentUser),
+    }));
   }
 
   async update(
