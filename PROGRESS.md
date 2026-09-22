@@ -1772,3 +1772,317 @@ Sigue el mismo sistema de diseño de las Fases 1-2 (`login.ts`/`.html`/
       `background-clip: text`
 - [x] Verificado: `npm run lint`, `npm run build` y `npm test` (264
       tests, sin cambios) pasan en `nocturne-web` en los dos commits
+
+## Rediseño visual — Íconos de servicio, avatares y estados vacíos (`nocturne-web`) — ✅ completa, commiteada y pusheada a `origin/main` (2026-09-21)
+
+Continúa el sistema de diseño de las Fases 1-2 y el login. Puesta al día
+(esta entrada se escribió después del trabajo). Dos commits:
+
+- [x] `ae1da17` — `feat: add service icons, colored initials avatars, and
+      richer empty states across all lists`
+  - **`shared/avatar-inicial/`**: círculo con 1-2 iniciales; el color sale de
+    un hash djb2 del nombre normalizado (sin espacios extremos, minúsculas),
+    elegido de una paleta de 6 tonos (`#2563eb`, `#0e7490`, `#0f766e`,
+    `#047857`, `#4f46e5`, `#0369a1`) que armoniza con el degradado de marca y
+    conserva contraste con texto blanco. Mismo nombre → mismo color siempre.
+    Iniciales: primera letra de las dos primeras palabras, prefiriendo las
+    que empiezan con letra ("Netflix 2 Meses" → "NM", no "N2"); `?` si no hay
+    nada usable
+  - **`shared/service-icon/`**: 18 íconos de [Simple Icons](https://simpleicons.org)
+    (v16.32.0, CC0) como **datos locales** (path SVG en el código, sin CDN).
+    `resolveServiceIcon(nombre)` compara por substring sin distinguir
+    mayúsculas ni acentos; **gana la keyword más larga** ("hbo max" antes que
+    "hbo", "youtube music" antes que "youtube") y las keywords de 1-3 letras
+    ("hbo", "max") exigen palabra completa para que "Maximo" no se lleve el
+    ícono de otra marca. Los logos casi negros (HBO, HBO Max, Tidal, Apple
+    TV) van sobre un tile claro para no desaparecer en el tema oscuro. Sin
+    match → mismo avatar de iniciales
+  - **`shared/service-icon-stack/`** (no estaba en el pedido): íconos
+    superpuestos de los servicios de un combo, con tooltip y `aria-label`
+    por ícono y un "+N" pasado el 5.º
+  - **`shared/empty-state/`**: ícono grande atenuado + mensaje + submensaje
+    opcional. Reemplaza el texto plano "No hay X con estos filtros" en las
+    **9 listas** (Servicios, Contactos, Cuentas, Ventas, Combos, Ventas Combo,
+    Gastos, Usuarios, Vencimientos), cada una con el ícono de su entrada del
+    sidebar. Se quitaron las reglas `.empty-state` de esas listas
+  - Aplicación: ícono junto al nombre en Servicios y Cuentas (el ícono del
+    servicio de la cuenta), avatar en Contactos, íconos de los servicios en
+    el listado de Combos y en la fila "Combo" del detalle de Venta Combo
+    (no existe una pantalla de detalle de Combo)
+  - Tests (347 en total tras el commit): resolución de ícono con y sin match,
+    color determinístico del avatar, estado vacío en varias listas
+- [x] `907726f` — `feat: add real Disney+ and Prime Video icons from Dashboard
+      Icons`
+  - Disney+ y Prime Video **no están en el paquete de Simple Icons**. Se
+    probó primero un fallback de "avatar con color de marca" y se reemplazó
+    (nunca se commiteó) por los íconos reales de
+    [Dashboard Icons](https://github.com/homarr-labs/dashboard-icons)
+    (**Apache-2.0**): `disney-plus.svg` (cuadrado 512×512 con fondo propio,
+    a pantalla completa en el tile) y `prime-video-alt.svg` (versión
+    cuadrada con "prime / video" apilado; `prime-video` es un wordmark ancho
+    con "video" casi invisible sobre fondo oscuro y `amazon-prime` dice solo
+    "prime"). Copiados **sin modificar**
+  - `shared/service-icon/assets/` guarda los SVG, `LICENSE-dashboard-icons`
+    y `NOTICE.md` (origen, commit, autores). La licencia cubre el trabajo del
+    repo, **no** concede derechos sobre las marcas: se usan solo para
+    identificar el servicio
+  - `angular.json` publica solo los `*.svg` de esa carpeta en
+    `/service-icons/`. `ServiceIconDef` pasa a ser una unión glifo (`path`) |
+    imagen (`src`); el componente dibuja las imágenes con `<img>`
+  - **Bug encontrado:** el ícono de Disney+ salía roto en el navegador
+    porque el `ng serve` ya corría cuando se agregó la regla de assets a
+    `angular.json` y no la recoge hasta reiniciarse (404 en
+    `/service-icons/*.svg`); tras reiniciar sirve ambos con 200 y el
+    contenido idéntico
+  - Tests: 351 en total
+
+## Rediseño — Usuario y salir al pie del sidebar + esqueleto de Configuración (`nocturne-web`) — ✅ completa, commiteada y pusheada a `origin/main` (2026-09-21)
+
+Un commit: `eda2c4f` — `feat: move user card and logout to sidebar footer, add
+Configuracion page shell`. Puesta al día (entrada escrita después del trabajo).
+
+- [x] El bloque de usuario y salir vivía en el **header** (no arriba del
+      sidebar); se movió al **pie del sidebar**, debajo de los links, pegado
+      al fondo (`position: sticky`, así sigue visible si la lista de links
+      desborda en pantallas bajas). El header quedó solo con el título
+- [x] Tarjeta clickeable: avatar de iniciales (`shared/avatar-inicial`),
+      nombre y rol debajo ("Admin" / "Revendedor", de `USER_ROLE_LABELS`).
+      Abre un `mat-menu` hacia arriba con "Configuración" y "Cerrar sesión"
+      (el mismo `Auth.logout()`, que revoca el refresh token). En móvil el
+      pie vive dentro del drawer y elegir Configuración lo cierra. Los links
+      de navegación no cambiaron
+- [x] Ruta `/configuracion`: hija del layout protegido por `authGuard`, sin
+      restricción de rol, y **fuera de `navItems`** (solo se llega desde el
+      menú del pie). Página esqueleto con título y un contenedor
+      `.secciones` para lo que viene
+- [x] Detalle de estilos: Material fija `min-width: 112px` en
+      `.mat-mdc-menu-panel`, así que el panel del menú (que vive en un
+      overlay) usa `.mat-mdc-menu-panel.nc-user-menu` en `styles.scss`
+- [x] Tests (366 tras el commit): menú abre/cierra (click, Escape, click
+      fuera), navegación a Configuración, "Cerrar sesión" revoca el refresh
+      token y manda a `/login`, el usuario está en el pie y no en el header,
+      y `/configuracion` carga para ambos roles (y sin sesión redirige a
+      `/login`)
+- [x] Revisado en navegador (Chromium headless): pie pegado al fondo a 760 px
+      de alto y aún visible a 480 px, menú hacia arriba en desktop y móvil
+
+## Configuración — Cambiar contraseña propia (`nocturne-api` + `nocturne-web`) — ✅ completa, commiteada y pusheada a `origin/main` (2026-09-21)
+
+Primera sección real de `/configuracion` (la página y la entrada desde el
+menú del pie del sidebar ya existían como esqueleto vacío en `nocturne-web`).
+Commits:
+
+- [x] `nocturne-api` `c819348` — `feat: add self-service password change with
+      transactional token revocation and rate limiting` (endpoint,
+      throttling, transacción y sus tests, y el ejemplo del README)
+- [x] `nocturne-api` `40970cc` — `fix: use before/after time window in
+      refresh token expiry test to avoid flakiness under load` (commit
+      aparte: es un hallazgo independiente de la feature, ver la
+      investigación más abajo)
+- [x] `nocturne-web` `0c25310` — `feat: add change password UI to
+      Configuracion`
+
+### Backend (`nocturne-api`)
+
+- [x] `PATCH /api/auth/change-password` — solo `JwtAuthGuard` (sin
+      `@Roles`): cualquier usuario logueado cambia **su** contraseña, no
+      solo admin. Body `{ currentPassword, newPassword }`
+      (`ChangePasswordDto`; `newPassword` mín. 8, igual que login y alta de
+      usuarios). Responde `200 { message: "Contraseña actualizada" }`
+- [x] `AuthService.changePassword` — valida `currentPassword` contra el
+      hash guardado del usuario autenticado. Si no coincide: **`400`** con
+      `"La contraseña actual no es correcta"`, sin tocar nada (ni la
+      contraseña ni los refresh tokens). Si coincide: hashea la nueva
+      (`UsersService.setPassword`, mismos `BCRYPT_ROUNDS` que el resto),
+      la guarda y **revoca todos los refresh tokens del usuario**
+      (`RefreshTokensService.revokeAllForUser`: un solo `UPDATE ... SET
+      revoked = true WHERE user_id = ? AND revoked = false`), incluida la
+      sesión actual
+- [x] **Decisión: `400`, no `401`, para la contraseña actual incorrecta.**
+      El usuario sí está autenticado; con `401` el interceptor del
+      frontend intentaría refrescar la sesión y reintentar en vez de
+      mostrar el error
+- [x] **Límite conocido (no pedido, pero conviene tenerlo presente):**
+      los **access tokens ya emitidos siguen valiendo hasta que expiran**
+      (`ACCESS_TOKEN_EXPIRES_IN`, 15 min por defecto) — son JWT stateless y
+      `JwtStrategy` no consulta refresh tokens. Lo que sí se corta al
+      instante es la capacidad de **renovar** cualquier sesión. Cerrarlo
+      del todo requeriría invalidar access tokens por usuario (p. ej. un
+      `tokenVersion` en el JWT), fuera del alcance de este paso
+- [x] **Rate limit** (endurecimiento posterior, antes de commitear): mismo
+      límite que login, 5 intentos por minuto por IP, `429`. Guard propio
+      `ChangePasswordThrottlerGuard` (análogo a `LoginThrottlerGuard`, con su
+      propio mensaje: *"Demasiados intentos de cambio de contraseña..."*) +
+      `@Throttle({ default: { limit: 5, ttl: 60_000 } })`. Detalles: el
+      contador es **por handler** (la clave del throttler incluye clase y
+      método), así que es independiente del de login aunque compartan
+      `ThrottlerModule`; `JwtAuthGuard` va **antes** que el throttler, así
+      que solo las requests autenticadas consumen cupo (tráfico anónimo, que
+      da 401, no agota el de nadie); cuentan todos los intentos autenticados,
+      también los que fallan por 400. Motivo: el endpoint acepta la
+      contraseña actual, y con un access token robado se podrían probar
+      contraseñas durante su vigencia
+- [x] **Transacción** (endurecimiento posterior): guardar la contraseña nueva
+      y revocar todos los refresh tokens van en **una sola
+      `DataSource.transaction()`** (`AuthService.changePassword`): si
+      cualquiera falla, no se aplica ninguna (ni cambia la contraseña ni se
+      toca algún token). `UsersService.updatePasswordHash(id, hash,
+      manager?)` y `RefreshTokensService.revokeAllForUser(userId, manager?)`
+      reciben el `EntityManager` opcional (sin él siguen usando su
+      repositorio). El **hasheo bcrypt se hace antes** de abrir la
+      transacción (`UsersService.hashPassword`), para no mantenerla abierta
+      mientras corre CPU. Reemplaza al `setPassword` de la primera versión
+- [x] Tests unitarios — `auth.service.spec.ts` (ambas operaciones reciben el
+      **mismo** manager de una única transacción, la contraseña se guarda
+      antes de revocar y el hasheo ocurre antes de abrir la transacción;
+      contraseña actual incorrecta → 400 con el mensaje y sin abrir
+      transacción; usuario inexistente/inactivo → 401; y con una
+      **transacción simulada con commit/rollback**: si la revocación falla,
+      la contraseña tampoco queda cambiada, y si el guardado falla, ningún
+      token se toca), `refresh-tokens.service.spec.ts` (`revokeAllForUser`
+      actualiza solo `{ userId, revoked: false }`, y con `EntityManager` usa
+      el de la transacción) y `users.service.spec.ts` (`hashPassword`,
+      `updatePasswordHash` con y sin manager)
+- [x] Test e2e nuevo — `test/auth-change-password.e2e-spec.ts` (Postgres
+      real, usuario propio de tipo REVENDEDOR en vez del admin del seed,
+      para no romper el login de los demás e2e): sin token → 401;
+      `newPassword` corta → 400 sin tocar nada; contraseña actual incorrecta
+      → 400 con mensaje claro, hash y tokens intactos y la sesión sigue
+      sirviendo; cambio exitoso con **3 sesiones** (1 por login real + 2
+      simuladas con `RefreshTokensService.create`) → las tres quedan
+      revocadas (0 activos en DB, las tres dan 401 en `/auth/refresh`), la
+      contraseña vieja da 401 y la nueva sirve para loguearse; el hash
+      guardado no es texto plano. **Rollback real:** un test hace fallar la
+      revocación con un `vi.spyOn` (después de que el `UPDATE` de la
+      contraseña ya corrió dentro de la transacción) → la request da 500 y,
+      contra Postgres, el hash de la contraseña sigue siendo el viejo y los
+      dos tokens siguen activos. Para no consumir el cupo de login (5/min)
+      este archivo firma los access tokens con `JwtService` y crea las
+      sesiones extra con `RefreshTokensService`, en vez de pasar por
+      `POST /auth/login`
+- [x] Test e2e nuevo — `test/auth-change-password-throttle.e2e-spec.ts`
+      (aparte, con su propia instancia de app/`ThrottlerStorage`, mismo
+      criterio que `auth-throttle.e2e-spec.ts`): 8 requests sin token dan 401
+      y **no** consumen cupo; 5 intentos autenticados pasan (400) y el **6to
+      da 429** con el mensaje del rate limit — llevando la contraseña actual
+      *correcta*, y se comprueba que no cambió nada (hash intacto, sesión
+      viva); agotar change-password no bloquea `POST /auth/login`
+      (contadores independientes)
+- [x] Verificado con mutaciones: quitar la transacción hace fallar el e2e
+      de rollback (el hash queda cambiado pese al fallo de la revocación) y
+      4 unit; quitar el guard hace fallar los 2 e2e de rate limit; quitar la
+      llamada a `revokeAllForUser` hace fallar el e2e y el unit
+      correspondientes
+- [x] `README.md`: ejemplo `curl` del endpoint junto a login/refresh/logout
+
+### Frontend (`nocturne-web`)
+
+- [x] `Auth.changePassword(current, new)` (`PATCH /auth/change-password`) y
+      `Auth.logout(reason?)`: con `'passwordChanged'` hace **el mismo
+      logout de siempre** (revoca el refresh token en el servidor, limpia
+      la sesión local) y redirige a `/login?passwordChanged=1`. Sin
+      argumento no cambia nada (`navigate(['/login'])`)
+- [x] `Login`: `?passwordChanged=1` muestra *"Contraseña actualizada.
+      Inicia sesión de nuevo."*, distinto del *"Tu sesión expiró..."* de
+      `?sessionExpired=1` (que no cambia; si llegaran ambos, gana el de
+      contraseña)
+- [x] `features/configuracion/cambiar-password/` — sección "Cambiar
+      contraseña" en `/configuracion`: contraseña actual, nueva y
+      confirmación. La confirmación se revalida cuando cambia la nueva; si
+      no coincide (o el formulario es inválido) `submit()` se detiene
+      **antes de llamar al backend**. Éxito → `auth.changePassword` →
+      `auth.logout('passwordChanged')`. `400` → muestra el mensaje del
+      backend en el formulario y en snackbar, **sin cerrar sesión**; otro
+      error → mensaje genérico, tampoco cierra sesión. El aviso "se
+      cerrará tu sesión en todos los dispositivos" está visible en la tarjeta
+- [x] **Bug encontrado en la prueba manual:** el snackbar de un intento
+      fallido ("La contraseña actual no es correcta", 5 s) seguía visible
+      encima de `/login` si el reintento salía bien inmediatamente. Se
+      descarta (`snackBar.dismiss()`) al iniciar cada envío, solo en este
+      componente (el helper compartido `injectFormError` no se tocó, para
+      no afectar los demás formularios); test agregado
+- [x] Tests: `auth.spec.ts` (PATCH con el body correcto; el 400 se propaga
+      sin tocar la sesión; `logout('passwordChanged')` revoca, limpia y
+      navega con `?passwordChanged=1`, no `sessionExpired`),
+      `login.spec.ts` (aviso nuevo, distinto del de sesión expirada),
+      `cambiar-password.spec.ts` (envío exitoso → PATCH, luego logout y
+      redirect con el parámetro correcto y sesión local borrada; contraseña
+      actual incorrecta → error visible, **sin** request de logout, sin
+      redirect y con los tokens intactos; 500 → mensaje genérico; no
+      coincide / corta / vacío → cero requests; revalidación de la
+      confirmación; descarte del snackbar al reintentar) y
+      `configuracion.spec.ts`. Verificado con una mutación (quitar el guard
+      de `submit()`): el test de "no coincide" falla
+- [x] `429` (rate limit del backend): el formulario muestra el mensaje del
+      backend (*"Demasiados intentos de cambio de contraseña..."*) en vez
+      del genérico, y tampoco cierra sesión; test agregado
+
+### Prueba manual (backend local + navegador)
+
+- [x] Contra Postgres local (docker/podman) con una **instancia nueva de la
+      API en `:3001`** (la de `:3000` no se tocó) y un **usuario de prueba
+      propio** (REVENDEDOR, creado por SQL y borrado al terminar — el
+      admin del seed no se modificó). Por `curl`: 2 sesiones → contraseña
+      actual incorrecta da `400` `"La contraseña actual no es correcta"` y
+      la sesión sigue sirviendo → cambio correcto `200` → ambos refresh
+      tokens dan `401` → login con la contraseña vieja `401`, con la nueva
+      `201` → sin token `401`
+- [x] Misma prueba **en navegador** (Chromium headless con el build de
+      desarrollo, tráfico a `:3000` redirigido a `:3001` y todo host externo
+      bloqueado para no tocar producción): login → menú del pie →
+      Configuración → confirmación distinta (botón deshabilitado, 0
+      llamadas al backend) → actual incorrecta (error, sigue en
+      `/configuracion`, tokens intactos) → cambio correcto (redirige a
+      `/login?passwordChanged=1` con el aviso, `localStorage` de sesión
+      vacío) → contraseña vieja falla ("Email o contraseña incorrectos.") →
+      contraseña nueva entra a `/dashboard`
+- [x] Ojo al probar a mano: `POST /auth/login` tiene rate limit de 5 por
+      minuto por IP; varios logins seguidos dan `429` (visto durante la
+      prueba, no es un fallo del cambio de contraseña)
+
+### Verificación
+
+- [x] `nocturne-api`: `npm run lint`, `npm run build`, `npm test` (261
+      tests; antes de este cambio eran 249) y `npm run test:e2e` (85 tests
+      en 18 archivos; antes 77) pasan
+- [x] `nocturne-web`: `npm run lint`, `npm test` (380 tests; antes 366) y
+      `npm run build` pasan
+
+### Investigación — el test que falló una vez en `npm test` (`nocturne-api`)
+
+Una corrida aislada de la suite unitaria mostró `1 failed | 252 passed` sin
+que se viera cuál. Se intentó reproducir sobre el código tal como estaba
+entonces (sin editar nada mientras corría):
+
+- [x] **Sin carga:** 40 vueltas × 3 suites (unit de change-password
+      `auth.service.spec` + `refresh-tokens.service.spec`, e2e de
+      change-password aislado, y la suite unitaria completa) = 120
+      corridas, **0 fallos**
+- [x] **Con la máquina saturada** (24 procesos `yes` sobre 12 núcleos,
+      mismas 3 suites, 40 vueltas): otras 120 corridas, **0 fallos**.
+      **No se reprodujo de forma natural** en 240 corridas
+- [x] Se descartó la colisión de rate limit entre archivos (los unit no
+      usan HTTP ni el `ThrottlerStorage`, y los e2e corrieron con
+      `fileParallelism: false` y aislados)
+- [x] **Candidato con mecanismo confirmado (no se sabe si fue el que falló):**
+      `refresh-tokens.service.spec.ts` › *"calcula expiresAt a partir de
+      jwt.refreshTokenExpiresIn"* — test **preexistente, ajeno a
+      change-password**. Toma `before = Date.now()`, llama a
+      `service.create()` (que hace un `bcrypt.hash`, ~50-100 ms) y exige
+      que `expiresAt` caiga en `before + 30d ± 1000 ms`; como `expiresAt` se
+      calcula *después* del hash, falla si esa parte tarda más de 1 s
+      (atasco de la máquina, pausa de GC...). Con un `bcrypt.hash` de 1,3 s
+      inyectado desde fuera del repo falla exactamente ese test:
+      `AssertionError: expected 1792627660034 to be less than or equal to
+      1792627659676`
+- [x] **Corregido:** el test ahora captura también `after` (justo después
+      de `create()`) y valida `before + 30d - 1 s <= expiresAt <= after +
+      30d + 1 s`: como `expiresAt` se calcula después del hash, el instante
+      base cae en `[before, after]` sin importar cuánto tarde; la tolerancia
+      de 1 s solo cubre redondeo/deriva del reloj. **Verificado con el mismo
+      experimento:** con el `bcrypt.hash` de 1,3 s inyectado el test fallaba
+      antes (`expected 1792628105445 to be less than or equal to
+      1792628105081`) y con el fix pasa (5 corridas seguidas, el test tarda
+      ~1,36 s, o sea que el retraso sí se aplicó). Una mutación (sumar 60 s de
+      más al TTL en `RefreshTokensService.create`) sigue haciéndolo fallar,
+      así que no perdió poder de detección
