@@ -25,6 +25,7 @@ import type { RenewSaleDto } from './dto/renew-sale.dto.js';
 import { generateCodigoVenta } from './codigo-venta.util.js';
 import { UserRole } from '../users/user-role.enum.js';
 import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
+import type { SearchResultItem } from '../common/search-result.js';
 
 const DIAS_ALERTA_DEFAULT = 3;
 
@@ -351,6 +352,26 @@ export class SalesService {
       throw new NotFoundException(`Venta ${id} no encontrada`);
     }
     return sale;
+  }
+
+  // Buscador global (ver src/search/): LIMIT 5, acotado por ownerId con el
+  // mismo criterio que findAllOwned — un REVENDEDOR nunca ve ventas de otro
+  // dueño en los resultados.
+  async search(
+    term: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<SearchResultItem[]> {
+    const qb = this.salesRepository
+      .createQueryBuilder('sale')
+      .select(['sale.id', 'sale.codigoVenta'])
+      .where('sale.codigoVenta ILIKE :term', { term: `%${term}%` })
+      .orderBy('sale.codigoVenta', 'ASC')
+      .limit(5);
+    if (currentUser.role === UserRole.REVENDEDOR) {
+      qb.andWhere('sale.ownerId = :ownerId', { ownerId: currentUser.id });
+    }
+    const sales = await qb.getMany();
+    return sales.map((s) => ({ id: s.id, label: s.codigoVenta }));
   }
 
   async update(

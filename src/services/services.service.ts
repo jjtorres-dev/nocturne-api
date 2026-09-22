@@ -7,6 +7,7 @@ import { UpdateServiceDto } from './dto/update-service.dto.js';
 import { QueryServiceDto } from './dto/query-service.dto.js';
 import { UserRole } from '../users/user-role.enum.js';
 import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
+import type { SearchResultItem } from '../common/search-result.js';
 
 // Se agrega siempre a las respuestas de findOneOwned/findAllOwned (admin o
 // REVENDEDOR, sin condicional por rol): solo id/name/email del dueño, nunca
@@ -114,6 +115,26 @@ export class ServicesService {
       throw new NotFoundException(`Servicio ${id} no encontrado`);
     }
     return service;
+  }
+
+  // Buscador global (ver src/search/): LIMIT 5, acotado por ownerId con el
+  // mismo criterio que findAllOwned — un REVENDEDOR nunca ve servicios de
+  // otro dueño en los resultados.
+  async search(
+    term: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<SearchResultItem[]> {
+    const qb = this.servicesRepository
+      .createQueryBuilder('service')
+      .select(['service.id', 'service.nombre'])
+      .where('service.nombre ILIKE :term', { term: `%${term}%` })
+      .orderBy('service.createdAt', 'DESC')
+      .limit(5);
+    if (currentUser.role === UserRole.REVENDEDOR) {
+      qb.andWhere('service.ownerId = :ownerId', { ownerId: currentUser.id });
+    }
+    const services = await qb.getMany();
+    return services.map((s) => ({ id: s.id, label: s.nombre }));
   }
 
   async update(

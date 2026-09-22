@@ -9,6 +9,7 @@ import { ServicesService } from '../services/services.service.js';
 import { Service } from '../services/entities/service.entity.js';
 import { UserRole } from '../users/user-role.enum.js';
 import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
+import type { SearchResultItem } from '../common/search-result.js';
 
 // Se agrega siempre a las respuestas de findOneOwned/findAllOwned (admin o
 // REVENDEDOR, sin condicional por rol): solo id/name/email del dueño, nunca
@@ -120,6 +121,26 @@ export class CombosService {
       throw new NotFoundException(`Combo ${id} no encontrado`);
     }
     return combo;
+  }
+
+  // Buscador global (ver src/search/): LIMIT 5, acotado por ownerId con el
+  // mismo criterio que findAllOwned — un REVENDEDOR nunca ve combos de otro
+  // dueño en los resultados.
+  async search(
+    term: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<SearchResultItem[]> {
+    const qb = this.combosRepository
+      .createQueryBuilder('combo')
+      .select(['combo.id', 'combo.nombre'])
+      .where('combo.nombre ILIKE :term', { term: `%${term}%` })
+      .orderBy('combo.createdAt', 'DESC')
+      .limit(5);
+    if (currentUser.role === UserRole.REVENDEDOR) {
+      qb.andWhere('combo.ownerId = :ownerId', { ownerId: currentUser.id });
+    }
+    const combos = await qb.getMany();
+    return combos.map((c) => ({ id: c.id, label: c.nombre }));
   }
 
   async update(

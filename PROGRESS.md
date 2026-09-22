@@ -2086,3 +2086,58 @@ entonces (sin editar nada mientras corría):
       ~1,36 s, o sea que el retraso sí se aplicó). Una mutación (sumar 60 s de
       más al TTL en `RefreshTokensService.create`) sigue haciéndolo fallar,
       así que no perdió poder de detección
+
+## Buscador global (backend)
+
+No ligada a una fase numerada del roadmap: agrega un endpoint de búsqueda
+transversal sobre el catálogo existente, sin tocar reglas de negocio de
+ningún módulo.
+
+- [x] `GET /api/search?q=<termino>` (`SearchController`, `JwtAuthGuard`,
+      sin `@Roles()` — cualquier usuario autenticado puede buscar). `q` con
+      menos de 2 caracteres o ausente → `400` (`QuerySearchDto`, `@IsString()
+      @MinLength(2)`, sin `@IsOptional()`)
+- [x] `SearchService.search()` corre las 7 búsquedas en paralelo
+      (`Promise.all`), delegando a un método `search(term, currentUser)`
+      agregado a cada servicio de dominio (`ContactsService`,
+      `AccountsService`, `ServicesService`, `CombosService`, `SalesService`,
+      `ComboSalesService`, `ExpensesService`) — mismo criterio de ownership
+      que `findAllOwned` (REVENDEDOR ve solo lo suyo vía `andWhere ownerId`,
+      admin ve todo), `LIMIT 5` por categoría
+- [x] Campos buscados (`ILIKE '%term%'`): Contactos → `nombre`, Cuentas →
+      `correo`, Servicios → `nombre`, Combos → `nombre`, Ventas →
+      `codigoVenta`, VentasCombo → `codigoVenta`, Gastos → `descripcion`.
+      **`AccountsService.search()` nunca trae `claveServicio`/`claveCorreo`**
+      (cifradas): el `.select()` del query builder ni siquiera las carga a
+      memoria, y el resultado solo expone `{ id, label }`
+      (`SearchResultItem`, `src/common/search-result.ts`), con `label` de
+      Cuentas sumando el nombre del servicio como contexto
+      (`"correo — Servicio"`)
+- [x] Respuesta: `{ contactos, cuentas, servicios, combos, ventas,
+      ventasCombo, gastos }`, cada uno `SearchResultItem[]`
+      (`src/search/search-response.ts`)
+- [x] `SearchModule` no tiene repositorios propios: importa los módulos de
+      dominio y reusa sus servicios (mismo patrón que `AccountingModule`
+      con los reportes), no lee tablas ajenas directo
+- [x] Tests: `search.service.spec.ts` (orquestación — las 7 categorías se
+      llaman en paralelo con el término y el usuario correctos, la
+      respuesta arma las claves esperadas) y
+      `test/search-ownership.e2e-spec.ts` (nuevo, 6 tests) — cada categoría
+      filtra por `ownerId` (un REVENDEDOR nunca ve resultados de otro
+      dueño; Ventas/VentasCombo se prueban buscando el `codigoVenta` ya
+      generado, porque no es un campo libre), el mínimo de 2 caracteres se
+      respeta (`400`), sin token da `401`, la clave cifrada de Cuentas
+      nunca aparece en el JSON de la respuesta (ni el campo ni el valor), y
+      el admin ve resultados de ambos revendedores en la misma búsqueda
+- [x] Prueba manual con `curl` contra el servidor local (`:3000`, ya
+      corriendo): 2 revendedores nuevos, registros en Contactos/Cuentas/
+      Servicios/Gastos/Ventas con un término compartido — buscar como A
+      devuelve solo lo de A (nunca lo de B), la clave cifrada de Cuentas no
+      aparece en la respuesta, `q` de 1 carácter o ausente da `400`, sin
+      token da `401`. Datos de prueba borrados al terminar (usuarios,
+      contactos, servicios, cuentas, gastos, venta)
+
+### Verificación
+
+- [x] `npm run lint`, `npm run build`, `npm test` (262 tests; antes 261) y
+      `npm run test:e2e` (91 tests en 19 archivos; antes 85 en 18) pasan

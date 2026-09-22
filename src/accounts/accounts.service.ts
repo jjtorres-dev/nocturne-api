@@ -12,6 +12,7 @@ import { ContactsService } from '../contacts/contacts.service.js';
 import { round2 } from '../common/round2.js';
 import { UserRole } from '../users/user-role.enum.js';
 import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
+import type { SearchResultItem } from '../common/search-result.js';
 
 export interface ServicioInversion {
   servicioId: string;
@@ -184,6 +185,33 @@ export class AccountsService {
       throw new NotFoundException(`Cuenta ${id} no encontrada`);
     }
     return account;
+  }
+
+  // Buscador global (ver src/search/): LIMIT 5, acotado por ownerId con el
+  // mismo criterio que findAllOwned. Busca solo en `correo` — NUNCA en
+  // claveServicio/claveCorreo (cifradas): el `.select()` explícito ni
+  // siquiera las trae a memoria. `label` suma el nombre del servicio como
+  // contexto (una cuenta sola no dice mucho sin saber de qué servicio es).
+  async search(
+    term: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<SearchResultItem[]> {
+    const qb = this.accountsRepository
+      .createQueryBuilder('account')
+      .leftJoin('account.servicio', 'servicio')
+      .select(['account.id', 'account.correo'])
+      .addSelect(['servicio.nombre'])
+      .where('account.correo ILIKE :term', { term: `%${term}%` })
+      .orderBy('account.createdAt', 'DESC')
+      .limit(5);
+    if (currentUser.role === UserRole.REVENDEDOR) {
+      qb.andWhere('account.ownerId = :ownerId', { ownerId: currentUser.id });
+    }
+    const accounts = await qb.getMany();
+    return accounts.map((a) => ({
+      id: a.id,
+      label: `${a.correo} — ${a.servicio?.nombre ?? '—'}`,
+    }));
   }
 
   async update(

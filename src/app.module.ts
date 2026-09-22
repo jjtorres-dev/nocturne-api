@@ -17,6 +17,7 @@ import { ExpensesModule } from './expenses/expenses.module.js';
 import { AccountingModule } from './accounting/accounting.module.js';
 import { CombosModule } from './combos/combos.module.js';
 import { ComboSalesModule } from './combo-sales/combo-sales.module.js';
+import { SearchModule } from './search/search.module.js';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { ComboSalesModule } from './combo-sales/combo-sales.module.js';
     AccountingModule,
     CombosModule,
     ComboSalesModule,
+    SearchModule,
   ],
   controllers: [AppController],
   providers: [AppService],

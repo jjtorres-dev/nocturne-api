@@ -7,6 +7,7 @@ import { UpdateContactDto } from './dto/update-contact.dto.js';
 import { QueryContactDto } from './dto/query-contact.dto.js';
 import { UserRole } from '../users/user-role.enum.js';
 import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
+import type { SearchResultItem } from '../common/search-result.js';
 
 // Se agrega siempre a las respuestas de findOneOwned/findAllOwned (admin o
 // REVENDEDOR, sin condicional por rol): solo id/name/email del dueño, nunca
@@ -111,6 +112,26 @@ export class ContactsService {
       throw new NotFoundException(`Contacto ${id} no encontrado`);
     }
     return contact;
+  }
+
+  // Buscador global (ver src/search/): LIMIT 5, acotado por ownerId con el
+  // mismo criterio que findAllOwned — un REVENDEDOR nunca ve contactos de
+  // otro dueño en los resultados.
+  async search(
+    term: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<SearchResultItem[]> {
+    const qb = this.contactsRepository
+      .createQueryBuilder('contact')
+      .select(['contact.id', 'contact.nombre'])
+      .where('contact.nombre ILIKE :term', { term: `%${term}%` })
+      .orderBy('contact.createdAt', 'DESC')
+      .limit(5);
+    if (currentUser.role === UserRole.REVENDEDOR) {
+      qb.andWhere('contact.ownerId = :ownerId', { ownerId: currentUser.id });
+    }
+    const contacts = await qb.getMany();
+    return contacts.map((c) => ({ id: c.id, label: c.nombre }));
   }
 
   async update(

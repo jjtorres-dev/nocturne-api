@@ -9,6 +9,7 @@ import { round2 } from '../common/round2.js';
 import { TimelineGroupBy } from '../common/timeline-group-by.enum.js';
 import { UserRole } from '../users/user-role.enum.js';
 import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
+import type { SearchResultItem } from '../common/search-result.js';
 
 export interface MetodoPagoGasto {
   metodoPago: string;
@@ -125,6 +126,26 @@ export class ExpensesService {
       throw new NotFoundException(`Gasto ${id} no encontrado`);
     }
     return expense;
+  }
+
+  // Buscador global (ver src/search/): LIMIT 5, acotado por ownerId con el
+  // mismo criterio que findAllOwned — un REVENDEDOR nunca ve gastos de otro
+  // dueño en los resultados.
+  async search(
+    term: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<SearchResultItem[]> {
+    const qb = this.expensesRepository
+      .createQueryBuilder('expense')
+      .select(['expense.id', 'expense.descripcion'])
+      .where('expense.descripcion ILIKE :term', { term: `%${term}%` })
+      .orderBy('expense.createdAt', 'DESC')
+      .limit(5);
+    if (currentUser.role === UserRole.REVENDEDOR) {
+      qb.andWhere('expense.ownerId = :ownerId', { ownerId: currentUser.id });
+    }
+    const expenses = await qb.getMany();
+    return expenses.map((e) => ({ id: e.id, label: e.descripcion }));
   }
 
   async update(

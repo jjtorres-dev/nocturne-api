@@ -26,6 +26,7 @@ import { addMonthsToDate, todayIso } from '../sales/date.util.js';
 import { round2 } from '../common/round2.js';
 import { UserRole } from '../users/user-role.enum.js';
 import type { AuthenticatedUser } from '../auth/jwt.strategy.js';
+import type { SearchResultItem } from '../common/search-result.js';
 
 interface AsignacionValidada {
   asignacion: ComboSaleAsignacionDto;
@@ -274,6 +275,26 @@ export class ComboSalesService {
       throw new NotFoundException(`VentaCombo ${id} no encontrada`);
     }
     return ventaCombo;
+  }
+
+  // Buscador global (ver src/search/): LIMIT 5, acotado por ownerId con el
+  // mismo criterio que findAllOwned — un REVENDEDOR nunca ve ventas de
+  // combo de otro dueño en los resultados.
+  async search(
+    term: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<SearchResultItem[]> {
+    const qb = this.ventaCombosRepository
+      .createQueryBuilder('ventaCombo')
+      .select(['ventaCombo.id', 'ventaCombo.codigoVenta'])
+      .where('ventaCombo.codigoVenta ILIKE :term', { term: `%${term}%` })
+      .orderBy('ventaCombo.createdAt', 'DESC')
+      .limit(5);
+    if (currentUser.role === UserRole.REVENDEDOR) {
+      qb.andWhere('ventaCombo.ownerId = :ownerId', { ownerId: currentUser.id });
+    }
+    const ventasCombo = await qb.getMany();
+    return ventasCombo.map((v) => ({ id: v.id, label: v.codigoVenta }));
   }
 
   async update(
