@@ -2141,3 +2141,107 @@ ningún módulo.
 
 - [x] `npm run lint`, `npm run build`, `npm test` (262 tests; antes 261) y
       `npm run test:e2e` (91 tests en 19 archivos; antes 85 en 18) pasan
+
+## Buscador global (frontend) (`nocturne-web`)
+
+Consume el `GET /api/search` de la sección anterior desde el header del
+panel admin.
+
+- [x] `GlobalSearch` (`src/app/shared/global-search/`), montado en
+      `AdminLayout` dentro de `<mat-toolbar class="header">`: en desktop,
+      input con lupa fijo a la derecha (`width: min(360px, 40vw)`); en
+      móvil solo el ícono, que al tocarlo expande el buscador a todo el
+      ancho del header ocultando hamburguesa y título —
+      `[(mobileExpanded)]` two-way con `AdminLayout.searchExpanded`, ya que
+      ocultar los hermanos del header no puede quedar encapsulado dentro
+      del propio componente
+- [x] Debounce de 300ms + mínimo de 2 caracteres + `switchMap` (cancela la
+      búsqueda anterior si el usuario sigue escribiendo) — verificado con
+      un test que arma la cancelación con dos `Subject` (la respuesta
+      vieja, aunque llegue después que la nueva, se ignora)
+- [x] Resultados agrupados por categoría (mismos íconos que el sidebar),
+      grupos vacíos no se muestran, estado vacío con `shared/empty-state`
+      cuando no hay nada
+- [x] Click/Enter navega: Cuentas → `/accounts/:id`, Ventas Combo →
+      `/combo-sales/:id`, el resto → su lista; limpia el buscador y cierra
+      el panel al navegar
+- [x] Teclado: flechas mueven el ítem activo (arranca en el primero),
+      Enter abre el activo, Escape cierra el panel; click afuera también
+      cierra
+- [x] Si quien busca es ADMIN, cada resultado muestra el nombre del dueño
+      en una segunda línea chica, leído directo de
+      `SearchResultItem.ownerName` (campo aparte del backend — ver Bloque
+      A más abajo sobre por qué no es un sufijo pegado al label)
+- [x] Tests: `global-search.spec.ts` (16 casos: debounce, mínimo de
+      caracteres, cancelación por switchMap, agrupación, navegación por
+      categoría, dueño solo a admin, teclado, click afuera, expandir/
+      colapsar en móvil) y `search-api.spec.ts`
+
+### Verificación
+
+- [x] `npm run lint`, `npm test` (455 tests) y build de producción con
+      `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=3000
+      npm run build` pasan
+
+## Bloque A — Autocompletados + buscador en móvil (`nocturne-web`)
+
+Solo frontend: ajustes puntuales sobre formularios ya existentes y sobre
+el buscador global de arriba, sin tocar el backend.
+
+- [x] **Buscador en móvil, corregido**: en un celular real la barra y el
+      panel de resultados se salían de la pantalla. El panel ahora usa
+      `position: fixed` con `left/right: 0` (ancla al viewport, no al
+      wrapper que podía no llegar de punta a punta) y `bottom: 0` en vez
+      de un `max-height` en `vh` (que salta con la barra de URL móvil); el
+      único valor que no sale de CSS puro es el `top` (el borde inferior
+      real del header ya renderizado), medido con `getBoundingClientRect()`
+      y reactualizado también en `window:resize`. Desktop no cambió.
+- [x] **Cuentas — se quita el autocompletado de Costo** al elegir el
+      Servicio: el costo es lo que se pagó al proveedor por la cuenta
+      completa, no tiene relación con `precioBase` del servicio (precio de
+      venta de un perfil) — se escribe siempre a mano. fechaFin sigue
+      autocompletándose igual que antes.
+- [x] **Ventas (crear)**: al elegir la Cuenta, el Precio se autocompleta
+      con el `precioBase` del Servicio de esa cuenta; fechaInicio arranca
+      en el día de hoy (`hoyIso()`). Ambos quedan editables — el guard de
+      "no pisar un valor que el usuario ya editó a mano" usa `dirty` del
+      `FormControl` (no un flag propio): `setValue()` programático no lo
+      marca, solo la interacción real con el input, así que es la señal
+      correcta para distinguir "lo puso el autocompletado" de "lo tocó el
+      usuario".
+- [x] **tasaCambio oculto en PEN**, en los 5 formularios con moneda
+      (Ventas crear/editar, Ventas Combo crear/editar, Gastos): en PEN se
+      fuerza a 1 y el campo se oculta (`@if (moneda !== PEN)`); con
+      cualquier otra moneda aparece y queda editable; al volver a PEN
+      vuelve a 1. Wireado con un `moneda.valueChanges.subscribe(...)` por
+      formulario (mismo criterio de no abstraer que el resto de estos
+      autocompletados, que tampoco comparten código entre sí).
+- [x] **Recordar el último método de pago usado**: `UltimoMetodoPago`
+      (`shared/metodo-pago/ultimo-metodo-pago.ts`) guarda en localStorage
+      con clave por `userId` (no mezcla sesiones en el mismo navegador).
+      Se lee como valor inicial SOLO en los 4 formularios de CREAR (Cuentas,
+      Ventas, Ventas Combo, Gastos — en editar siempre gana el metodoPago
+      real del registro) y se graba al guardar con éxito en los 6
+      formularios (los 4 de arriba + Ventas/Ventas Combo editar): tanto
+      crear como editar representan un método realmente usado.
+- [x] **Backend, cambio pedido en este mismo bloque**: `ownerName` pasó de
+      ir pegado al `label` con un `\n` (ver Buscador global (backend) más
+      arriba) a ser un campo aparte de `SearchResultItem` — un
+      `\n` real dentro de la descripción de un Gasto (texto libre del
+      usuario) se podía confundir con el separador. `resolveOwnerName()`
+      reemplaza a `withOwnerSuffix()` en los 7 `search()`; el frontend deja
+      de parsear la segunda línea del label y lee `item.ownerName` directo.
+      Test agregado con una descripción de Gasto que contiene un `\n` real,
+      confirmando que no se confunde con el dueño.
+- [x] Tests para cada punto de arriba (mobile panel, autocompletados,
+      tasaCambio × 5 formularios, UltimoMetodoPago × 6 formularios + su
+      propio spec) — 483 tests en total en `nocturne-web` (antes 455).
+
+### Verificación
+
+- [x] `nocturne-web`: `npm run lint`, `npm test` (483 tests) y build de
+      producción con
+      `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=3000
+      npm run build` pasan
+- [x] `nocturne-api`: `npm run lint`, `npm test` (262 tests) y
+      `npm run test:e2e` (92 tests) pasan (cambio de `ownerName`)
