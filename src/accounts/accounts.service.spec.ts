@@ -1,5 +1,5 @@
 import { NotFoundException } from '@nestjs/common';
-import type { Repository } from 'typeorm';
+import type { DataSource, Repository } from 'typeorm';
 import { AccountsService } from './accounts.service.js';
 import { Account } from './entities/account.entity.js';
 import { Profile } from './profiles/entities/profile.entity.js';
@@ -84,6 +84,11 @@ describe('AccountsService', () => {
     groupBy: ReturnType<typeof vi.fn>;
     getRawMany: ReturnType<typeof vi.fn>;
   };
+  let transactionManager: {
+    create: ReturnType<typeof vi.fn>;
+    save: ReturnType<typeof vi.fn>;
+  };
+  let dataSource: { transaction: ReturnType<typeof vi.fn> };
   let servicesService: { findOne: ReturnType<typeof vi.fn> };
   let contactsService: { findOne: ReturnType<typeof vi.fn> };
   let accountsService: AccountsService;
@@ -107,6 +112,21 @@ describe('AccountsService', () => {
     profilesRepo = {
       createQueryBuilder: vi.fn(() => queryBuilder),
     };
+    // Simula dataSource.transaction(cb): corre el callback con un manager
+    // cuyo create/save se comportan igual que los repos de arriba (crea el
+    // objeto tal cual, "guarda" devolviéndolo con un id si no tiene).
+    transactionManager = {
+      create: vi.fn((_entity, data) => ({ ...data })),
+      save: vi.fn(async (entityOrArray) => {
+        if (Array.isArray(entityOrArray)) {
+          return entityOrArray;
+        }
+        return { id: 'account-nuevo', ...entityOrArray };
+      }),
+    };
+    dataSource = {
+      transaction: vi.fn(async (cb) => cb(transactionManager)),
+    };
     servicesService = { findOne: vi.fn().mockResolvedValue(service) };
     contactsService = {
       findOne: vi.fn().mockResolvedValue({ id: 'contact-1', ownerId: revendedorA.id }),
@@ -115,6 +135,7 @@ describe('AccountsService', () => {
     accountsService = new AccountsService(
       accountsRepo as unknown as Repository<Account>,
       profilesRepo as unknown as Repository<Profile>,
+      dataSource as unknown as DataSource,
       servicesService as unknown as ServicesService,
       contactsService as unknown as ContactsService,
     );
@@ -176,6 +197,72 @@ describe('AccountsService', () => {
       await accountsService.create(dto, revendedorA);
 
       expect(contactsService.findOne).toHaveBeenCalledWith('contact-1');
+    });
+
+    it('sin crearPerfiles, no abre transacción ni crea perfiles', async () => {
+      const dto = {
+        servicioId: 'service-1',
+        correo: 'a@b.com',
+        claveServicio: 'clave',
+        fechaInicio: '2026-01-01',
+        fechaFin: '2026-02-01',
+        costo: 10,
+        metodoPago: 'transferencia',
+      };
+
+      await accountsService.create(dto, revendedorA);
+
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('con crearPerfiles y el servicio con pantallasMax, crea "Perfil 1".."Perfil N" en la misma transacción que la cuenta', async () => {
+      const dto = {
+        servicioId: 'service-1',
+        correo: 'a@b.com',
+        claveServicio: 'clave',
+        fechaInicio: '2026-01-01',
+        fechaFin: '2026-02-01',
+        costo: 10,
+        metodoPago: 'transferencia',
+        crearPerfiles: true,
+      };
+
+      const result = await accountsService.create(dto, revendedorA);
+
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+      expect(transactionManager.create).toHaveBeenCalledWith(
+        Account,
+        expect.objectContaining({ correo: 'a@b.com', ownerId: revendedorA.id }),
+      );
+      // service.pantallasMax es 4 (ver el fixture `service` de arriba).
+      expect(transactionManager.save).toHaveBeenCalledWith([
+        expect.objectContaining({ cuentaId: 'account-nuevo', nombre: 'Perfil 1' }),
+        expect.objectContaining({ cuentaId: 'account-nuevo', nombre: 'Perfil 2' }),
+        expect.objectContaining({ cuentaId: 'account-nuevo', nombre: 'Perfil 3' }),
+        expect.objectContaining({ cuentaId: 'account-nuevo', nombre: 'Perfil 4' }),
+      ]);
+      expect(result.id).toBe('account-nuevo');
+    });
+
+    it('con crearPerfiles pero el servicio SIN pantallasMax (SIN_PERFILES), lo ignora en silencio y crea la cuenta sola', async () => {
+      servicesService.findOne.mockResolvedValue({ ...service, pantallasMax: null });
+      const dto = {
+        servicioId: 'service-1',
+        correo: 'a@b.com',
+        claveServicio: 'clave',
+        fechaInicio: '2026-01-01',
+        fechaFin: '2026-02-01',
+        costo: 10,
+        metodoPago: 'transferencia',
+        crearPerfiles: true,
+      };
+
+      await accountsService.create(dto, revendedorA);
+
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(accountsRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ correo: 'a@b.com' }),
+      );
     });
 
     it('propaga el 404 si el servicio no existe', async () => {

@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { Account } from './entities/account.entity.js';
 import { Profile } from './profiles/entities/profile.entity.js';
 import { CreateAccountDto } from './dto/create-account.dto.js';
@@ -72,6 +72,8 @@ export class AccountsService {
     private readonly accountsRepository: Repository<Account>,
     @InjectRepository(Profile)
     private readonly profilesRepository: Repository<Profile>,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
     private readonly servicesService: ServicesService,
     private readonly contactsService: ContactsService,
   ) {}
@@ -85,11 +87,41 @@ export class AccountsService {
       dto.proveedorId,
       currentUser.id,
     );
-    const account = this.accountsRepository.create({
-      ...dto,
-      ownerId: currentUser.id,
+    const { crearPerfiles, ...accountData } = dto;
+
+    // Perfiles automáticos: sin pantallasMax (servicio SIN_PERFILES) no hay
+    // nada que generar, se ignora en silencio — no hace falta transacción
+    // para una sola escritura.
+    const servicio = crearPerfiles
+      ? await this.servicesService.findOne(dto.servicioId)
+      : null;
+    if (!servicio?.pantallasMax) {
+      const account = this.accountsRepository.create({
+        ...accountData,
+        ownerId: currentUser.id,
+      });
+      return this.accountsRepository.save(account);
+    }
+
+    // Cuenta + "Perfil 1".."Perfil N" en la MISMA transacción (ver
+    // PROGRESS.md): si cualquier perfil falla al guardarse, la cuenta
+    // tampoco queda creada.
+    const pantallasMax = servicio.pantallasMax;
+    return this.dataSource.transaction(async (manager) => {
+      const account = manager.create(Account, {
+        ...accountData,
+        ownerId: currentUser.id,
+      });
+      const saved = await manager.save(account);
+      const perfiles = Array.from({ length: pantallasMax }, (_, i) =>
+        manager.create(Profile, {
+          cuentaId: saved.id,
+          nombre: `Perfil ${i + 1}`,
+        }),
+      );
+      await manager.save(perfiles);
+      return saved;
     });
-    return this.accountsRepository.save(account);
   }
 
   // Sin scope de ownership: uso interno de otros módulos (ProfilesService,

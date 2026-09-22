@@ -57,4 +57,12 @@ export class CreateAccountDto {
   @IsOptional()
   @IsBoolean()
   renovacionAutomatica?: boolean;
+
+  // Si viene en true y el servicio tiene pantallasMax, crea "Perfil 1"..
+  // "Perfil N" en la misma transacción que la cuenta (ver
+  // AccountsService.create). Sin pantallasMax (servicio SIN_PERFILES) se
+  // ignora en silencio, no es un error.
+  @IsOptional()
+  @IsBoolean()
+  crearPerfiles?: boolean;
 }
