@@ -66,18 +66,22 @@ describe('RefreshTokensService', () => {
     it('calcula expiresAt a partir de jwt.refreshTokenExpiresIn', async () => {
       const before = Date.now();
       await service.create('user-1');
+      const after = Date.now();
       const saved = repo.save.mock.calls[0][0];
 
       expect(configService.getOrThrow).toHaveBeenCalledWith(
         'jwt.refreshTokenExpiresIn',
       );
-      const expectedMs = 30 * 24 * 60 * 60 * 1000;
-      expect(saved.expiresAt.getTime()).toBeGreaterThanOrEqual(
-        before + expectedMs - 1000,
-      );
-      expect(saved.expiresAt.getTime()).toBeLessThanOrEqual(
-        before + expectedMs + 1000,
-      );
+      // `create()` calcula expiresAt DESPUÉS de bcrypt.hash (duración
+      // variable), así que el instante base cae en algún punto de
+      // [before, after] sin importar cuánto tarde el hash. Una ventana fija
+      // desde `before` fallaba si la máquina se atascaba más de 1 s ahí; la
+      // tolerancia solo cubre redondeo/deriva del reloj, no la duración.
+      const ttlMs = 30 * 24 * 60 * 60 * 1000;
+      const toleranceMs = 1000;
+      const expiresAt = saved.expiresAt.getTime();
+      expect(expiresAt).toBeGreaterThanOrEqual(before + ttlMs - toleranceMs);
+      expect(expiresAt).toBeLessThanOrEqual(after + ttlMs + toleranceMs);
     });
   });
 
