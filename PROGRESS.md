@@ -2245,3 +2245,81 @@ el buscador global de arriba, sin tocar el backend.
       npm run build` pasan
 - [x] `nocturne-api`: `npm run lint`, `npm test` (262 tests) y
       `npm run test:e2e` (92 tests) pasan (cambio de `ownerName`)
+
+## Bloque B — Procesos: renovar desde Vencimientos, copiar datos, perfiles automáticos (`nocturne-web` + `nocturne-api`)
+
+- [x] **Diálogo de renovación compartido** (`shared/venta-renew-dialog/`,
+      nuevo): fecha de fin actual + "Se extenderá N meses" (`duracionMeses`
+      de la venta), sin calcular nunca la nueva fecha en el frontend — eso
+      lo sigue haciendo el backend, y el snackbar de éxito del caller la
+      muestra con el resultado de `POST /sales/:id/renew` (que ya aceptaba
+      ese body opcional desde antes, sin cambios de backend acá). Precio
+      prellenado con el precio actual de la venta; moneda/tasaCambio
+      también con los valores actuales (mismo ocultamiento en PEN que el
+      resto de formularios); metodoPago con el **recordado**
+      (`UltimoMetodoPago`), no con el de la venta — renovar es un cobro
+      nuevo. Reemplaza la confirmación simple (`ConfirmDialog`) que tenía
+      Ventas antes.
+- [x] **Vencimientos**: botón "Renovar" (mismo diálogo) al lado de
+      WhatsApp, en tabla y tarjetas, solo en Vencidas/Por vencer. Al
+      renovar, refresca la lista (la venta sale de Vencidas). Una venta
+      hija de un combo (`ventaComboId` no nulo) muestra el badge "Parte de
+      combo" en vez de Renovar, con link al detalle del combo — el backend
+      ya bloqueaba renovar ventas hijas (`assertNoPerteneceAUnCombo`), acá
+      solo se evita ofrecer una acción que iba a fallar.
+- [x] **Copiar datos para el cliente** (`features/sales/copiar-datos.util.ts`):
+      arma un mensaje de texto plano (servicio, correo, contraseña, perfil,
+      PIN, vencimiento) y lo copia con `navigator.clipboard.writeText` —
+      NUNCA en una URL (ni wa.me): la contraseña quedaría en el historial
+      del navegador. Las credenciales siempre se piden a `GET
+      /accounts/:id` (único lugar donde vienen), nunca de datos anidados de
+      otro endpoint (ni siquiera los de `GET /combo-sales/:id`, que sí
+      traen la relación completa). Omite la línea de Contraseña si la
+      cuenta no tiene (proveedor que solo da código) y las de Perfil/PIN si
+      la venta no tiene perfilId (servicio sin perfiles); PIN también se
+      omite solo si el perfil no tiene uno cargado. Disponible como acción
+      del snackbar al crear una Venta, por fila en Ventas, y en el detalle
+      de Venta Combo (junta los datos de todas las cuentas del combo en un
+      solo mensaje, un bloque por cuenta).
+- [x] **Perfiles automáticos** — backend: `POST /api/accounts` acepta
+      `crearPerfiles?: boolean`; si viene en `true` y el servicio elegido
+      tiene `pantallasMax`, crea "Perfil 1".."Perfil N" (sin PIN) en la
+      MISMA transacción que la cuenta (`AccountsService.create`, nuevo
+      `DataSource.transaction`) — si algo falla, no queda ni la cuenta ni
+      ningún perfil. Sin `pantallasMax` (servicio SIN_PERFILES) se ignora
+      en silencio, no es error. — frontend: checkbox "Crear N perfiles
+      automáticamente" en Cuentas, marcado por defecto, visible solo al
+      CREAR (nunca al editar) y solo si el servicio elegido tiene
+      `pantallasMax`.
+- [x] Tests:
+  - `venta-renew-dialog.spec.ts`: manda exactamente `{ precio, moneda,
+    tasaCambio, metodoPago }` a `renew` (nunca `fechaFin`), precarga con
+    los valores actuales salvo metodoPago (con el recordado), tasaCambio
+    oculto en PEN, graba el método usado al renovar.
+  - `vencimientos-list.spec.ts`: una venta hija de combo no tiene botón de
+    Renovar (muestra el badge en su lugar); una venta normal sí lo tiene.
+  - `copiar-datos.util.spec.ts`: omite Contraseña sin `claveServicio`,
+    omite Perfil/PIN sin perfil, omite solo PIN si el perfil no tiene uno,
+    nunca arma nada parecido a una URL (`http`/`wa.me`).
+  - `ventas-list.spec.ts` / `venta-combo-detail.spec.ts`: `copiarDatos`
+    pide siempre `GET /accounts/:id` (nunca la cuenta anidada de otra
+    respuesta), y confirma con spies que jamás llama a `window.open` ni a
+    `console.log` durante el flujo de copiado.
+  - `accounts.service.spec.ts`: con `crearPerfiles` y `pantallasMax`, crea
+    "Perfil 1".."Perfil N" en la transacción; sin `pantallasMax`, lo
+    ignora sin abrir transacción.
+  - `test/accounts-perfiles-automaticos.e2e-spec.ts` (nuevo, e2e contra
+    Postgres real): crea los N perfiles correctos sin PIN; sin
+    `pantallasMax` no crea nada; **atomicidad forzada con un `CHECK
+    (false)` real agregado temporalmente a la tabla `profiles`** (no
+    tocando código de la app) — con esa falla real de Postgres a mitad de
+    la transacción, ni la cuenta ni ningún perfil quedan persistidos.
+
+### Verificación
+
+- [x] `nocturne-web`: `npm run lint`, `npm test` (517 tests; antes 483) y
+      build de producción con
+      `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=3000
+      npm run build` pasan
+- [x] `nocturne-api`: `npm run lint`, `npm run build`, `npm test` (265
+      tests; antes 262) y `npm run test:e2e` (96 tests; antes 92) pasan
