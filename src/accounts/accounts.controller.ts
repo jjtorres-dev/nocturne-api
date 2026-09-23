@@ -17,6 +17,9 @@ import { AccountsService } from './accounts.service.js';
 import { CreateAccountDto } from './dto/create-account.dto.js';
 import { UpdateAccountDto } from './dto/update-account.dto.js';
 import { QueryAccountDto } from './dto/query-account.dto.js';
+import { QueryPorRenovarDto } from './dto/query-por-renovar.dto.js';
+
+const DIAS_POR_RENOVAR_DEFAULT = 7;
 
 // Sin RolesGuard/@Roles acá: un REVENDEDOR puede crear/editar/desactivar
 // cuentas igual que un admin, pero acotado a las suyas — el control de
@@ -33,6 +36,27 @@ export class AccountsController {
     @CurrentUser() currentUser: AuthenticatedUser,
   ) {
     return this.accountsService.findAllOwned(query, currentUser);
+  }
+
+  // Bloque C. Tiene que ir antes de `:id` (si no, Nest matchea
+  // "por-renovar" como el parámetro de esa ruta).
+  @Get('por-renovar')
+  porRenovar(
+    @Query() query: QueryPorRenovarDto,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ) {
+    return this.accountsService.porRenovar(
+      query.dias ?? DIAS_POR_RENOVAR_DEFAULT,
+      currentUser,
+    );
+  }
+
+  @Get(':id/rentabilidad')
+  rentabilidad(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ) {
+    return this.accountsService.rentabilidad(id, currentUser);
   }
 
   @Get(':id')

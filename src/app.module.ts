@@ -18,6 +18,7 @@ import { AccountingModule } from './accounting/accounting.module.js';
 import { CombosModule } from './combos/combos.module.js';
 import { ComboSalesModule } from './combo-sales/combo-sales.module.js';
 import { SearchModule } from './search/search.module.js';
+import { DashboardModule } from './dashboard/dashboard.module.js';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { SearchModule } from './search/search.module.js';
     CombosModule,
     ComboSalesModule,
     SearchModule,
+    DashboardModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -1,12 +1,17 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, IsNull, Not, Repository } from 'typeorm';
 import { Account } from './entities/account.entity.js';
 import { Profile } from './profiles/entities/profile.entity.js';
 import { CreateAccountDto } from './dto/create-account.dto.js';
 import { UpdateAccountDto } from './dto/update-account.dto.js';
 import { QueryAccountDto } from './dto/query-account.dto.js';
 import type { AccountListItem } from './account-list-item.js';
+import type { AccountRentabilidad } from './account-rentabilidad.js';
+import type { AccountPorRenovar } from './account-por-renovar.js';
+import { Payment } from '../payments/entities/payment.entity.js';
+import { Sale } from '../sales/entities/sale.entity.js';
+import { ServiceType } from '../services/service-type.enum.js';
 import { ServicesService } from '../services/services.service.js';
 import { ContactsService } from '../contacts/contacts.service.js';
 import { round2 } from '../common/round2.js';
@@ -279,6 +284,113 @@ export class AccountsService {
     const account = await this.findOneOwned(id, currentUser);
     account.activo = true;
     return this.accountsRepository.save(account);
+  }
+
+  // Bloque C: ¿cuánto del costo de la cuenta ya se recuperó con ventas?
+  // Mismo scoping que el detalle (findOneOwned → 404 si es ajena).
+  async rentabilidad(
+    id: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<AccountRentabilidad> {
+    const account = await this.findOneOwned(id, currentUser);
+    const servicio = await this.servicesService.findOne(account.servicioId);
+    const usaPerfiles =
+      servicio.tipo === ServiceType.CON_PERFILES ||
+      servicio.tipo === ServiceType.FAMILIAR;
+
+    const [perfiles, ingresosRow, ventasCombo] = await Promise.all([
+      this.profilesRepository
+        .createQueryBuilder('profile')
+        .select('COUNT(*)', 'total')
+        .addSelect('COUNT(profile.clienteId)', 'vendidos')
+        .where('profile.cuentaId = :id', { id })
+        .andWhere('profile.activo = true')
+        .getRawOne<{ total: string; vendidos: string }>(),
+      // innerJoin a `venta`: los Payment de una VentaCombo tienen ventaId
+      // null y quedan afuera solos; el filtro de ventaComboId IS NULL es
+      // explícito igual, por si una venta hija llegara a tener un Payment.
+      this.dataSource
+        .getRepository(Payment)
+        .createQueryBuilder('payment')
+        .innerJoin('payment.venta', 'venta')
+        .select('COALESCE(SUM(payment.montoPEN), 0)', 'total')
+        .where('venta.cuentaId = :id', { id })
+        .andWhere('venta.ventaComboId IS NULL')
+        .getRawOne<{ total: string }>(),
+      this.dataSource
+        .getRepository(Sale)
+        .count({ where: { cuentaId: id, ventaComboId: Not(IsNull()) } }),
+    ]);
+
+    const perfilesTotal = parseInt(perfiles?.total ?? '0', 10);
+    const perfilesVendidos = parseInt(perfiles?.vendidos ?? '0', 10);
+    const ingresos = round2(parseFloat(ingresosRow?.total ?? '0'));
+    const unidades = usaPerfiles ? perfilesTotal : 1;
+    return {
+      costo: account.costo,
+      perfilesTotal,
+      perfilesVendidos,
+      usaPerfiles,
+      ingresos,
+      ganancia: round2(ingresos - account.costo),
+      potencial: round2(servicio.precioBase * unidades),
+      ventasCombo,
+    };
+  }
+
+  // Bloque C: cuentas activas con el proveedor vencidas o por vencer en
+  // los próximos `dias` días. Usa CURRENT_DATE de Postgres (mismo criterio
+  // que el vencimiento de Ventas): el reloj de quien llama no cuenta.
+  // Scoping igual que findAllOwned (REVENDEDOR → solo las suyas).
+  async porRenovar(
+    dias: number,
+    currentUser: AuthenticatedUser,
+  ): Promise<AccountPorRenovar[]> {
+    const qb = this.accountsRepository
+      .createQueryBuilder('account')
+      .leftJoin('account.servicio', 'servicio')
+      .leftJoin('account.owner', 'owner')
+      .select('account.id', 'id')
+      .addSelect('account.correo', 'correo')
+      .addSelect('account.servicioId', 'servicioId')
+      .addSelect('servicio.nombre', 'servicioNombre')
+      .addSelect('owner.name', 'ownerName')
+      .addSelect('CAST(account.fechaFin AS text)', 'fechaFin')
+      .addSelect('(account.fechaFin - CURRENT_DATE)', 'diasRestantes')
+      .addSelect(
+        `(SELECT COUNT(DISTINCT s.cliente_id) FROM sales s
+          WHERE s.cuenta_id = account.id AND s.activo = true)`,
+        'clientesActivos',
+      )
+      .where('account.activo = true')
+      .andWhere('account.fechaFin <= CURRENT_DATE + CAST(:dias AS int)', {
+        dias,
+      })
+      .orderBy('account.fechaFin', 'ASC')
+      .addOrderBy('account.correo', 'ASC');
+    if (currentUser.role === UserRole.REVENDEDOR) {
+      qb.andWhere('account.ownerId = :ownerId', { ownerId: currentUser.id });
+    }
+    const rows = await qb.getRawMany<{
+      id: string;
+      correo: string;
+      servicioId: string;
+      servicioNombre: string | null;
+      ownerName: string | null;
+      fechaFin: string;
+      diasRestantes: number | string;
+      clientesActivos: number | string;
+    }>();
+    return rows.map((row) => ({
+      id: row.id,
+      correo: row.correo,
+      servicioId: row.servicioId,
+      servicioNombre: row.servicioNombre ?? '—',
+      fechaFin: row.fechaFin,
+      diasRestantes: Number(row.diasRestantes),
+      clientesActivos: Number(row.clientesActivos),
+      ownerName: resolveOwnerName(row.ownerName ?? undefined, currentUser),
+    }));
   }
 
   // La usa SalesService para sincronizar (o liberar, con null) el cliente
