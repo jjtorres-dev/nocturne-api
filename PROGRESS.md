@@ -2323,3 +2323,88 @@ el buscador global de arriba, sin tocar el backend.
       npm run build` pasan
 - [x] `nocturne-api`: `npm run lint`, `npm run build`, `npm test` (265
       tests; antes 262) y `npm run test:e2e` (96 tests; antes 92) pasan
+
+## Bloque C — Visual: rentabilidad por cuenta, inventario y cuentas del proveedor por vencer (`nocturne-web` + `nocturne-api`)
+
+- [x] **Rentabilidad por cuenta** — backend: `GET /api/accounts/:id/rentabilidad`
+      (`AccountsService.rentabilidad`), mismo scoping que el detalle
+      (`findOneOwned` → 404 si es ajena). Devuelve `costo`,
+      `perfilesTotal`/`perfilesVendidos` (perfiles activos / con cliente),
+      `ingresos` (suma de `Payment.montoPEN` de las ventas SUELTAS de la
+      cuenta: inicial + renovaciones; `innerJoin` a `venta` +
+      `venta.ventaComboId IS NULL` explícito, así el pago de un combo nunca
+      entra), `ganancia` (`ingresos - costo`), `potencial` (`precioBase ×
+      perfilesTotal`) y dos campos extra: `usaPerfiles` y `ventasCombo`
+      (cantidad de ventas hijas de combo en la cuenta, para la nota del
+      frontend). **Decisión**: en servicios sin perfiles (SIN_PERFILES/IPTV)
+      `perfilesTotal` es 0, así que `potencial` usa `precioBase × 1` (la
+      cuenta completa es la única unidad vendible) en vez de devolver 0.
+      — frontend: tarjeta "Rentabilidad" en el detalle de Cuenta con barra
+      "Recuperado S/X de S/Y" (tope 100%), "Perfiles vendidos N/M" (o
+      "Cuenta completa: vendida/libre" sin perfiles), potencial, ganancia
+      en verde si es positiva / "Faltan S/Z para cubrir el costo" si no, y
+      la nota "Las ventas por combo no se reparten por cuenta" solo si
+      `ventasCombo > 0`. Se recarga junto con los perfiles; si falla, la
+      tarjeta no aparece y el resto del detalle carga igual.
+- [x] **Inventario** — backend: `GET /api/dashboard/inventario` (nuevo
+      `DashboardModule`), por cada servicio activo: perfiles libres
+      (activos, sin cliente, en cuentas activas) en CON_PERFILES/FAMILIAR
+      — mismo criterio de "usa perfiles" que `SalesService.create` — o
+      cuentas activas sin cliente en el resto. Scoping igual que
+      `GET /sales/summary` (REVENDEDOR → lo suyo, ADMIN → todo el negocio,
+      con `ownerName` para distinguir servicios homónimos de distintos
+      dueños). — frontend: tarjeta "Disponible para vender" con el ícono
+      de cada servicio, libres y unidad (perfiles/cuentas); los de 0 libres
+      atenuados.
+- [x] **Cuentas del proveedor por vencer** — backend: endpoint dedicado
+      `GET /api/accounts/por-renovar?dias=N` (default 7, 0..365; declarado
+      antes de `:id`) en vez de sobrecargar el listado: devuelve una forma
+      distinta (`diasRestantes`, `clientesActivos`, `servicioNombre`). Cuentas
+      activas con `fechaFin <= CURRENT_DATE + N` (incluye las ya vencidas),
+      ordenadas por `fechaFin`; `diasRestantes = fechaFin - CURRENT_DATE`
+      de Postgres (negativo si venció); `clientesActivos` = clientes
+      DISTINTOS con ventas activas en la cuenta (incluye hijas de combo).
+      Scoping igual que `findAllOwned`, `ownerName` solo para ADMIN.
+      — frontend: tarjeta "Cuentas por renovar con el proveedor" en el
+      Dashboard (servicio con ícono, correo, "Vence hoy/mañana/en N días" o
+      "Venció hace N días" en rojo, "N clientes activos"), cada fila es un
+      link a `/accounts/:id`.
+- [x] **Ganancia del mes** en el Dashboard: reusa
+      `GET /api/accounting/summary` sin parámetros (mes calendario actual,
+      "lo mío" también para ADMIN), con desglose ingresos/inversión/gastos y
+      link a Contabilidad.
+- [x] Las 3 tarjetas nuevas del Dashboard cargan en paralelo y por
+      separado: si una falla, muestra su propio error sin tapar a las demás
+      ni a las de vencimientos.
+- [x] Tests:
+  - `test/bloque-c-rentabilidad-inventario.e2e-spec.ts` (nuevo, 12 tests,
+    admin + 2 revendedores reales creados por la API, JWT real de
+    `/auth/login`; fechas armadas desde `SELECT CURRENT_DATE` de Postgres,
+    no del reloj de Node): rentabilidad exacta (15 PEN + renovación 16 PEN
+    + 5 USD × 3.8 = 50; la venta de combo de 30 NO suma; costo 40 →
+    ganancia 10; potencial 12.5 × 4 = 50), cuenta sin ventas (ganancia
+    -costo, perfil desactivado fuera del total), cuenta sin perfiles
+    vendida solo por combo, 404 ajena / admin ve, 401 sin token;
+    inventario con libres vs ocupados (perfiles ocupados por venta y por
+    combo, perfil desactivado, cuentas inactivas) y respetando el dueño;
+    por renovar con bordes (-3, hoy, +2, +7 dentro; +8 fuera salvo con
+    `?dias=8`; inactiva vencida fuera), `diasRestantes` según el servidor,
+    `clientesActivos` distintos, dueño respetado y `dias` inválido → 400.
+  - `nocturne-web`: `cuenta-detail.spec.ts` (tarjeta: textos, verde vs
+    "Faltan", tope de la barra, nota de combo condicional, variante sin
+    perfiles, falla aislada), `dashboard.spec.ts` (ganancia sin filtros,
+    inventario con ícono y atenuado, por renovar con links/días/clientes,
+    estado vacío, error aislado por tarjeta), `cuentas-api.spec.ts` y
+    `dashboard-api.spec.ts` (nuevo).
+
+### Verificación
+
+- [x] `nocturne-web`: `npm run lint`, `npm test` (533 tests; antes 517) y
+      build de producción con
+      `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=3000
+      npm run build` pasan
+- [x] `nocturne-api`: `npm run lint`, `npm run build`, `npm test` (265
+      tests) y `npm run test:e2e` (108 tests; antes 96) pasan
+- [x] Probado manualmente en el navegador contra el backend local
+      (tarjeta de rentabilidad en el detalle de Cuenta y las 3 tarjetas
+      nuevas del Dashboard)
