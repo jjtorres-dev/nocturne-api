@@ -1,9 +1,18 @@
 import { addMonthsToDate } from './date.util.js';
 
 describe('addMonthsToDate', () => {
-  it('suma meses enteros', () => {
-    expect(addMonthsToDate('2026-01-05', 1)).toBe('2026-02-05');
-    expect(addMonthsToDate('2026-01-05', 12)).toBe('2027-01-05');
+  // Misma tabla que `sumarMeses` en nocturne-web (shared/fecha.util.spec.ts):
+  // si se cambia una, cambiar la otra, para que front y back no diverjan.
+  it.each([
+    ['2026-01-15', 1, '2026-02-15'],
+    ['2026-01-31', 1, '2026-02-28'],
+    ['2028-01-31', 1, '2028-02-29'],
+    ['2026-03-31', 1, '2026-04-30'],
+    ['2028-02-29', 12, '2029-02-28'],
+    ['2026-01-31', 2.5, '2026-04-15'],
+    ['2026-12-31', 1, '2027-01-31'],
+  ])('%s + %s meses = %s', (fecha, meses, esperado) => {
+    expect(addMonthsToDate(fecha, meses)).toBe(esperado);
   });
 
   it('aproxima la parte fraccionaria a días (mes de 30 días)', () => {
