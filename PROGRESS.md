@@ -2494,7 +2494,7 @@ rutas ni el backend.
 - [x] `nocturne-web`: `npm run lint`, `npm test` y `npm run build` pasan
       antes de cada uno de los 4 commits (tests: 533 → 534 → 543 → 556)
 
-## Renovación con el proveedor (`nocturne-api` + `nocturne-web`) — ✅ completa, sin commitear todavía (2026-09-23)
+## Renovación con el proveedor (`nocturne-api` + `nocturne-web`) — ✅ completa, commiteada y pusheada a `origin/main` (2026-09-23)
 
 Contexto: `Account.costo` era un solo número y Contabilidad lo contaba según
 la fecha en que se **registró** la cuenta (`createdAt`), no cuando se
@@ -2615,6 +2615,18 @@ había quedado en el bloque de textos.
 - [x] `docs/glosario.md`: "Pagado a proveedores" actualizado; nuevos
       "Costo de la renovación", "Pagos al proveedor", "Renovar con el
       proveedor", "Fecha de pago" y "Vence ahora el".
+
+### Commits
+
+- `nocturne-api` `9bc484e` feat: add provider payments with backfill,
+  provider renewal endpoint and accounting by payment date
+- `nocturne-web` `84eb01f` feat: add renew-with-provider dialog, provider
+  payment history and cost breakdown
+
+### Pendiente
+
+- [ ] `sumarMeses` desborda a fin de mes (31/01 + 1 mes = 03/03); unificar
+      con `sumarMesesSinDesbordar` en frontend y backend.
 
 ### Verificación
 
