@@ -1,8 +1,11 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import type { DataSource, Repository } from 'typeorm';
 import { AccountsService } from './accounts.service.js';
 import { Account } from './entities/account.entity.js';
 import { Profile } from './profiles/entities/profile.entity.js';
+import { AccountPayment } from './entities/account-payment.entity.js';
+import { AccountPaymentType } from './account-payment-type.enum.js';
+import { Moneda } from '../sales/moneda.enum.js';
 import { ServiceType } from '../services/service-type.enum.js';
 import type { ServicesService } from '../services/services.service.js';
 import type { ContactsService } from '../contacts/contacts.service.js';
@@ -87,6 +90,7 @@ describe('AccountsService', () => {
   let transactionManager: {
     create: ReturnType<typeof vi.fn>;
     save: ReturnType<typeof vi.fn>;
+    update: ReturnType<typeof vi.fn>;
   };
   let dataSource: { transaction: ReturnType<typeof vi.fn> };
   let servicesService: { findOne: ReturnType<typeof vi.fn> };
@@ -123,6 +127,7 @@ describe('AccountsService', () => {
         }
         return { id: 'account-nuevo', ...entityOrArray };
       }),
+      update: vi.fn(async () => ({ affected: 1 })),
     };
     dataSource = {
       transaction: vi.fn(async (cb) => cb(transactionManager)),
@@ -157,7 +162,7 @@ describe('AccountsService', () => {
 
       expect(servicesService.findOne).toHaveBeenCalledWith('service-1');
       expect(contactsService.findOne).not.toHaveBeenCalled();
-      expect(accountsRepo.create).toHaveBeenCalledWith({
+      expect(transactionManager.create).toHaveBeenCalledWith(Account, {
         ...dto,
         ownerId: revendedorA.id,
       });
@@ -175,7 +180,7 @@ describe('AccountsService', () => {
 
       const result = await accountsService.create(dto, revendedorA);
 
-      expect(accountsRepo.create).toHaveBeenCalledWith({
+      expect(transactionManager.create).toHaveBeenCalledWith(Account, {
         ...dto,
         ownerId: revendedorA.id,
       });
@@ -199,7 +204,33 @@ describe('AccountsService', () => {
       expect(contactsService.findOne).toHaveBeenCalledWith('contact-1');
     });
 
-    it('sin crearPerfiles, no abre transacción ni crea perfiles', async () => {
+    it('crea la cuenta y su pago COMPRA_INICIAL (PEN, tasa 1, fecha = fechaInicio) en la misma transacción', async () => {
+      const dto = {
+        servicioId: 'service-1',
+        correo: 'a@b.com',
+        claveServicio: 'clave',
+        fechaInicio: '2026-01-01',
+        fechaFin: '2026-02-01',
+        costo: 12.5,
+        metodoPago: 'transferencia',
+      };
+
+      await accountsService.create(dto, revendedorA);
+
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+      expect(transactionManager.create).toHaveBeenCalledWith(AccountPayment, {
+        cuentaId: 'account-nuevo',
+        fecha: '2026-01-01',
+        monto: 12.5,
+        moneda: Moneda.PEN,
+        tasaCambio: 1,
+        montoPEN: 12.5,
+        metodoPago: 'transferencia',
+        tipo: AccountPaymentType.COMPRA_INICIAL,
+      });
+    });
+
+    it('sin crearPerfiles no crea perfiles', async () => {
       const dto = {
         servicioId: 'service-1',
         correo: 'a@b.com',
@@ -212,7 +243,10 @@ describe('AccountsService', () => {
 
       await accountsService.create(dto, revendedorA);
 
-      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(transactionManager.create).not.toHaveBeenCalledWith(
+        Profile,
+        expect.anything(),
+      );
     });
 
     it('con crearPerfiles y el servicio con pantallasMax, crea "Perfil 1".."Perfil N" en la misma transacción que la cuenta', async () => {
@@ -259,9 +293,13 @@ describe('AccountsService', () => {
 
       await accountsService.create(dto, revendedorA);
 
-      expect(dataSource.transaction).not.toHaveBeenCalled();
-      expect(accountsRepo.create).toHaveBeenCalledWith(
+      expect(transactionManager.create).toHaveBeenCalledWith(
+        Account,
         expect.objectContaining({ correo: 'a@b.com' }),
+      );
+      expect(transactionManager.create).not.toHaveBeenCalledWith(
+        Profile,
+        expect.anything(),
       );
     });
 
@@ -467,6 +505,142 @@ describe('AccountsService', () => {
         accountsService.update(baseAccount.id, { servicioId: 'service-1' }, admin),
       ).rejects.toThrow(NotFoundException);
       expect(accountsRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('si no toca costo/fechaInicio/metodoPago, no abre transacción ni toca el pago de compra', async () => {
+      accountsRepo.findOne.mockResolvedValue(baseAccount);
+
+      await accountsService.update(baseAccount.id, { correo: 'nuevo@b.com' }, revendedorA);
+
+      expect(accountsRepo.update).toHaveBeenCalledWith(baseAccount.id, { correo: 'nuevo@b.com' });
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('al cambiar el costo, actualiza la cuenta y su pago COMPRA_INICIAL en la misma transacción (lo demás, de la cuenta)', async () => {
+      accountsRepo.findOne.mockResolvedValue(baseAccount); // costo 10, 2026-01-01, transferencia
+
+      await accountsService.update(baseAccount.id, { costo: 25 }, revendedorA);
+
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+      expect(transactionManager.update).toHaveBeenCalledWith(Account, baseAccount.id, { costo: 25 });
+      expect(transactionManager.update).toHaveBeenCalledWith(
+        AccountPayment,
+        { cuentaId: baseAccount.id, tipo: AccountPaymentType.COMPRA_INICIAL },
+        expect.objectContaining({
+          monto: 25,
+          montoPEN: 25,
+          fecha: '2026-01-01',
+          metodoPago: 'transferencia',
+        }),
+      );
+      expect(accountsRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('al cambiar fechaInicio y metodoPago, el pago de compra toma la nueva fecha y método', async () => {
+      accountsRepo.findOne.mockResolvedValue(baseAccount);
+
+      await accountsService.update(
+        baseAccount.id,
+        { fechaInicio: '2025-12-15', metodoPago: 'Yape' },
+        revendedorA,
+      );
+
+      expect(transactionManager.update).toHaveBeenCalledWith(
+        AccountPayment,
+        { cuentaId: baseAccount.id, tipo: AccountPaymentType.COMPRA_INICIAL },
+        expect.objectContaining({ monto: 10, fecha: '2025-12-15', metodoPago: 'Yape' }),
+      );
+    });
+
+    it('si la cuenta no tuviera pago de compra, lo crea en vez de fallar', async () => {
+      accountsRepo.findOne.mockResolvedValue(baseAccount);
+      transactionManager.update.mockImplementation(async (entity) =>
+        entity === AccountPayment ? { affected: 0 } : { affected: 1 },
+      );
+
+      await accountsService.update(baseAccount.id, { costo: 30 }, revendedorA);
+
+      expect(transactionManager.create).toHaveBeenCalledWith(
+        AccountPayment,
+        expect.objectContaining({
+          cuentaId: baseAccount.id,
+          monto: 30,
+          tipo: AccountPaymentType.COMPRA_INICIAL,
+        }),
+      );
+    });
+  });
+
+  describe('renewProvider', () => {
+    const dto = {
+      monto: 5,
+      moneda: Moneda.USD,
+      tasaCambio: 3.8,
+      metodoPago: 'Binance',
+      fechaPago: '2026-01-30',
+      nuevaFechaFin: '2026-03-01',
+    };
+
+    it('crea el pago RENOVACION (montoPEN = monto × tasa) y mueve fechaFin, en una sola transacción', async () => {
+      accountsRepo.findOne.mockResolvedValue(baseAccount); // fechaFin 2026-02-01
+
+      await accountsService.renewProvider(baseAccount.id, dto, revendedorA);
+
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+      expect(transactionManager.create).toHaveBeenCalledWith(AccountPayment, {
+        cuentaId: baseAccount.id,
+        fecha: '2026-01-30',
+        monto: 5,
+        moneda: Moneda.USD,
+        tasaCambio: 3.8,
+        montoPEN: 19,
+        metodoPago: 'Binance',
+        tipo: AccountPaymentType.RENOVACION,
+      });
+      expect(transactionManager.update).toHaveBeenCalledWith(Account, baseAccount.id, {
+        fechaFin: '2026-03-01',
+      });
+    });
+
+    it('sin fechaPago usa hoy, y sin tasaCambio usa 1', async () => {
+      accountsRepo.findOne.mockResolvedValue(baseAccount);
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-01-31T12:00:00Z'));
+      try {
+        await accountsService.renewProvider(
+          baseAccount.id,
+          { monto: 12, moneda: Moneda.PEN, metodoPago: 'Yape', nuevaFechaFin: '2026-03-01' },
+          revendedorA,
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+
+      expect(transactionManager.create).toHaveBeenCalledWith(
+        AccountPayment,
+        expect.objectContaining({ fecha: '2026-01-31', tasaCambio: 1, montoPEN: 12 }),
+      );
+    });
+
+    it.each(['2026-02-01', '2026-01-15'])(
+      'da 400 si la nueva fecha (%s) no es posterior a la fechaFin actual, sin escribir nada',
+      async (nuevaFechaFin) => {
+        accountsRepo.findOne.mockResolvedValue(baseAccount); // fechaFin 2026-02-01
+
+        await expect(
+          accountsService.renewProvider(baseAccount.id, { ...dto, nuevaFechaFin }, revendedorA),
+        ).rejects.toThrow(BadRequestException);
+        expect(dataSource.transaction).not.toHaveBeenCalled();
+      },
+    );
+
+    it('un REVENDEDOR no puede renovar una cuenta ajena (404)', async () => {
+      accountsRepo.findOne.mockResolvedValue(baseAccount); // owner = revendedorA
+
+      await expect(
+        accountsService.renewProvider(baseAccount.id, dto, revendedorB),
+      ).rejects.toThrow(NotFoundException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
     });
   });
 

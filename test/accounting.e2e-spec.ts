@@ -12,22 +12,6 @@ import { AppModule } from '../src/app.module.js';
 // afecta que otros archivos de e2e corran en paralelo sobre la misma BD.
 const FECHA_TEST = '2020-06-15';
 
-// Payment de renovación usa la fecha "de hoy" del servidor (no viene del
-// body de renew, ver SalesService.renew) y Account.createdAt es siempre
-// "ahora": ambos se corrigen acá con un UPDATE directo para que caigan
-// dentro de FECHA_TEST también.
-async function backdate(
-  dataSource: DataSource,
-  table: string,
-  column: string,
-  id: string,
-): Promise<void> {
-  await dataSource.query(
-    `UPDATE "${table}" SET "${column}" = $1 WHERE id = $2`,
-    [FECHA_TEST, id],
-  );
-}
-
 interface AccountingSummary {
   ingresos: number;
   inversion: number;
@@ -93,8 +77,9 @@ describe('Accounting (e2e)', () => {
       .expect(201);
     clienteId = clienteRes.body.id;
 
-    // costo=100 -> "inversion" esperada. createdAt se backdatea a
-    // FECHA_TEST porque la API no lo expone (lo pone @CreateDateColumn).
+    // costo=100 -> "inversion" esperada: el pago compra_inicial que crea
+    // la API tiene fecha=fechaInicio=FECHA_TEST. createdAt queda en "hoy" a
+    // propósito: Contabilidad ya no lo usa (antes había que backdatearlo).
     const cuentaRes = await request(app.getHttpServer())
       .post('/api/accounts')
       .set('Authorization', `Bearer ${token}`)
@@ -109,7 +94,6 @@ describe('Accounting (e2e)', () => {
       })
       .expect(201);
     cuentaId = cuentaRes.body.id;
-    await backdate(dataSource, 'accounts', 'created_at', cuentaId);
 
     // Venta con fechaInicio=FECHA_TEST -> Payment venta_inicial queda con
     // fecha=FECHA_TEST directo (SalesService.create usa fechaInicio).
@@ -162,6 +146,7 @@ describe('Accounting (e2e)', () => {
     ]);
     await dataSource.query('DELETE FROM expenses WHERE id = $1', [gastoId]);
     await dataSource.query('DELETE FROM sales WHERE id = $1', [ventaId]);
+    await dataSource.query('DELETE FROM account_payments WHERE cuenta_id = $1', [cuentaId]);
     await dataSource.query('DELETE FROM accounts WHERE id = $1', [cuentaId]);
     await dataSource.query('DELETE FROM contacts WHERE id = $1', [clienteId]);
     await dataSource.query('DELETE FROM services WHERE id = $1', [
@@ -215,7 +200,7 @@ describe('Accounting (e2e)', () => {
     ]);
   });
 
-  it('timeline (groupBy=day): un único punto en FECHA_TEST con ingresos=80, gastos=20, ganancia=60', async () => {
+  it('timeline (groupBy=day): un único punto en FECHA_TEST con ingresos=80, inversion=100, gastos=20, ganancia=-40', async () => {
     const res = await request(app.getHttpServer())
       .get('/api/accounting/timeline')
       .query({ desde: FECHA_TEST, hasta: FECHA_TEST, groupBy: 'day' })
@@ -223,7 +208,7 @@ describe('Accounting (e2e)', () => {
       .expect(200);
 
     expect(res.body).toEqual([
-      { periodo: FECHA_TEST, ingresos: 80, gastos: 20, ganancia: 60 },
+      { periodo: FECHA_TEST, ingresos: 80, inversion: 100, gastos: 20, ganancia: -40 },
     ]);
   });
 });

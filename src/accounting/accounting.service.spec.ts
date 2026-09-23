@@ -35,6 +35,7 @@ describe('AccountingService', () => {
   let accountsService: {
     sumCosto: ReturnType<typeof vi.fn>;
     sumCostoByServicio: ReturnType<typeof vi.fn>;
+    sumCostoByPeriodo: ReturnType<typeof vi.fn>;
   };
   let servicesService: { findAll: ReturnType<typeof vi.fn> };
   let accountingService: AccountingService;
@@ -57,6 +58,7 @@ describe('AccountingService', () => {
     accountsService = {
       sumCosto: vi.fn().mockResolvedValue(0),
       sumCostoByServicio: vi.fn().mockResolvedValue([]),
+      sumCostoByPeriodo: vi.fn().mockResolvedValue([]),
     };
     servicesService = { findAll: vi.fn().mockResolvedValue([]) };
 
@@ -152,10 +154,14 @@ describe('AccountingService', () => {
   });
 
   describe('timeline', () => {
-    it('combina ingresos y gastos por periodo, ordenado y con ganancia = ingresos - gastos', async () => {
+    it('combina ingresos, inversión y gastos por periodo, ordenado y con ganancia = ingresos - inversion - gastos', async () => {
       paymentsService.sumMontoPENByPeriodo.mockResolvedValue([
         { periodo: '2026-01-02', ingresos: 100 },
         { periodo: '2026-01-01', ingresos: 50 },
+      ]);
+      accountsService.sumCostoByPeriodo.mockResolvedValue([
+        { periodo: '2026-01-01', inversion: 30 },
+        { periodo: '2026-01-04', inversion: 20 },
       ]);
       expensesService.sumMontoPENByPeriodo.mockResolvedValue([
         { periodo: '2026-01-01', gastos: 10 },
@@ -170,11 +176,18 @@ describe('AccountingService', () => {
       );
 
       expect(result).toEqual([
-        { periodo: '2026-01-01', ingresos: 50, gastos: 10, ganancia: 40 },
-        { periodo: '2026-01-02', ingresos: 100, gastos: 0, ganancia: 100 },
-        { periodo: '2026-01-03', ingresos: 0, gastos: 5, ganancia: -5 },
+        { periodo: '2026-01-01', ingresos: 50, inversion: 30, gastos: 10, ganancia: 10 },
+        { periodo: '2026-01-02', ingresos: 100, inversion: 0, gastos: 0, ganancia: 100 },
+        { periodo: '2026-01-03', ingresos: 0, inversion: 0, gastos: 5, ganancia: -5 },
+        { periodo: '2026-01-04', ingresos: 0, inversion: 20, gastos: 0, ganancia: -20 },
       ]);
       expect(paymentsService.sumMontoPENByPeriodo).toHaveBeenCalledWith(
+        DESDE,
+        HASTA,
+        TimelineGroupBy.DAY,
+        revendedorA.id,
+      );
+      expect(accountsService.sumCostoByPeriodo).toHaveBeenCalledWith(
         DESDE,
         HASTA,
         TimelineGroupBy.DAY,

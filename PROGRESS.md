@@ -2489,13 +2489,143 @@ rutas ni el backend.
   rename filter to Sin finalizar
 - `5de3637` test: raise timeout for slow first test in venta-create spec
 
-### Pendiente
-
-- [ ] Contabilidad cuenta el costo de una cuenta en el mes en que se
-      registró, no en el que se compró — se corrige en el bloque de
-      renovación con el proveedor.
-
 ### Verificación
 
 - [x] `nocturne-web`: `npm run lint`, `npm test` y `npm run build` pasan
       antes de cada uno de los 4 commits (tests: 533 → 534 → 543 → 556)
+
+## Renovación con el proveedor (`nocturne-api` + `nocturne-web`) — ✅ completa, sin commitear todavía (2026-09-23)
+
+Contexto: `Account.costo` era un solo número y Contabilidad lo contaba según
+la fecha en que se **registró** la cuenta (`createdAt`), no cuando se
+compró. Tampoco había forma de registrar que una cuenta se renovó con el
+proveedor, ni que esa renovación costó distinto. Cierra el pendiente que
+había quedado en el bloque de textos.
+
+### Backend (`nocturne-api`)
+
+- [x] **Pagos al proveedor** — entidad nueva `AccountPayment` (tabla
+      `account_payments`): `cuentaId` (FK a `accounts`), `fecha` (date),
+      `monto`, `moneda` (mismo enum `Moneda` que ventas), `tasaCambio`,
+      `montoPEN` (lo calcula siempre el backend: `round2(monto ×
+      tasaCambio)`), `metodoPago`, `tipo` (`compra_inicial` |
+      `renovacion`) y timestamps. Sin `owner_id` propio: el dueño sale de
+      la cuenta, igual que `Payment` con `Sale`. **Decisión**: la FK es
+      `ON DELETE NO ACTION`, mismo criterio que `payments.venta_id` — la
+      app nunca borra cuentas (soft delete con `activo`), y un borrado
+      físico no debe llevarse en silencio el historial de pagos. Por eso
+      los cleanups de todos los e2e borran `account_payments` antes que
+      `accounts`.
+- [x] **Migración `AddAccountPayments1790145262908` con backfill** — un
+      pago `compra_inicial` por cada cuenta existente: `monto = costo`, PEN,
+      tasa 1, `metodoPago` de la cuenta y `fecha = fechaInicio` (cuándo se
+      compró, no `created_at`). Idempotente con `WHERE NOT EXISTS`; el SQL
+      está exportado (`BACKFILL_ACCOUNT_PAYMENTS_SQL`) para que el e2e
+      pruebe exactamente el mismo. **Ojo**: `migration:generate` también
+      quería tocar FKs/CHECK escritos a mano en migraciones anteriores
+      (entre ellos borrar `CHK_payments_venta_xor_combo`); se dejaron
+      afuera, la migración solo crea lo de `account_payments`. Corrida
+      contra Postgres local: 19 cuentas → 19 pagos, misma suma que
+      `SUM(costo)` (S/ 314.00), fecha/monto/método coinciden con cada
+      cuenta; `migration:revert` + `migration:run` también probados. Como
+      el Start Command de Railway corre las migraciones al desplegar, el
+      backfill va a correr en producción con el push.
+- [x] **Crear cuenta** crea su pago `compra_inicial` en la misma
+      transacción que ya existía para `crearPerfiles` (ahora la transacción
+      se abre siempre: cuenta + pago + perfiles si se pidieron).
+      **Editar** `costo`, `fechaInicio` o `metodoPago` actualiza ese mismo
+      pago en la misma transacción (si por algún motivo no existiera, lo
+      crea); editar cualquier otro campo no lo toca ni abre transacción.
+- [x] **`POST /api/accounts/:id/renew-provider`** (`findOneOwned` → 404 si
+      es ajena). Body: `monto`, `moneda`, `tasaCambio` (opcional, default
+      1), `metodoPago`, `fechaPago` (opcional, default hoy — reloj del
+      servidor, igual que la renovación de ventas) y `nuevaFechaFin`, que
+      tiene que ser posterior a la `fechaFin` actual (400 si no). En una
+      sola transacción crea el pago `renovacion` y actualiza `fechaFin`.
+      Devuelve la cuenta actualizada.
+- [x] **`GET /api/accounts/:id/provider-payments`** — historial de pagos al
+      proveedor de la cuenta (compra + renovaciones), del más reciente al
+      más antiguo. Mismo scoping (404 si es ajena).
+- [x] **Contabilidad** — la inversión ("Pagado a proveedores") pasa a ser
+      la suma de `account_payments.montoPEN` según su `fecha`, en vez de
+      `Account.costo` según `createdAt`, en `summary`, `by-service` (por
+      `account.servicioId`) y `timeline`, con el mismo scoping por dueño de
+      siempre (join a la cuenta). Sigue incluyendo cuentas desactivadas.
+      **Cambio de forma en `timeline`**: antes no incluía la inversión
+      (`ganancia = ingresos - gastos`); ahora cada punto trae `inversion` y
+      `ganancia = ingresos - inversion - gastos`, igual que el resumen.
+- [x] **Rentabilidad de la cuenta** — `costo` pasa a ser la suma de todos
+      sus pagos al proveedor, y devuelve el desglose `desgloseCosto:
+      { compraInicial, renovaciones, cantidadRenovaciones }`.
+- [x] Tests:
+  - Unit (`accounts.service.spec.ts`, `accounting.service.spec.ts`):
+    compra inicial al crear, resync al editar (y que no se toque si no
+    cambia costo/fecha/método, y que se cree si faltara), renovación
+    (pago + fecha en una transacción, defaults de fecha y tasa, 400 con
+    fecha igual o anterior, 404 ajena), timeline con inversión.
+  - e2e nuevo `test/renovacion-proveedor.e2e-spec.ts` (17 tests, usuarios
+    reales y JWT real, contra Postgres): backfill N cuentas → N pagos y
+    correrlo dos veces no duplica (y ninguna cuenta de la BD queda sin su
+    compra ni con dos); crear/editar la cuenta mantiene su compra; una
+    cuenta registrada hoy con fecha de inicio el mes pasado cuenta su
+    inversión en el mes pasado (summary, by-service y timeline) y no en
+    este; la renovación cuenta en el mes de su fecha de pago con su propio
+    monto; scoping del admin con `viewOwnerId`; renovar crea el pago y
+    mueve la fecha; monto distinto al de la compra y en otra moneda;
+    **atomicidad** con una falla forzada dentro de la transacción (un
+    trigger de Postgres que rechaza el UPDATE de `fecha_fin`: no queda ni
+    el pago ni el cambio de fecha, y sin el trigger la misma renovación
+    pasa); 400 con fecha igual/anterior o sin campos obligatorios; 404
+    ajena (el admin sí puede); 401 sin token; la cuenta sale de "por
+    renovar"; historial ordenado y 404 ajeno; rentabilidad = compra +
+    renovaciones con desglose.
+  - e2e existentes: `accounting.e2e-spec.ts` y
+    `accounting-ownership.e2e-spec.ts` ya no backdatean `created_at` de
+    las cuentas (Contabilidad no lo usa más); el timeline esperado ahora
+    trae `inversion`. `bloque-c-rentabilidad-inventario.e2e-spec.ts`
+    espera el `desgloseCosto`.
+
+### Frontend (`nocturne-web`)
+
+- [x] **Diálogo "Renovar con el proveedor"**
+      (`features/accounts/cuenta-renovar-proveedor-dialog`): costo de la
+      renovación, moneda y tipo de cambio (oculto y en 1 con PEN), método de
+      pago, fecha de pago (hoy, fecha local) y "Vence ahora el". Monto,
+      moneda, tipo de cambio y método arrancan con los del **último pago al
+      proveedor** de esa cuenta (y lo dice: "La última vez pagaste…"); si
+      no hay o falla la carga, quedan para escribir. "Vence ahora el" =
+      vencimiento actual + 1 mes, editable, y tiene que ser posterior al
+      actual. **Decisión**: el + 1 mes usa `sumarMesesSinDesbordar`
+      (nuevo en `fecha.util`): 31/01 → 28/02, no 03/03 como `sumarMeses`
+      (que siguen usando los demás formularios) — acá un desborde dejaría
+      la cuenta venciendo días después de la fecha real sin que se note.
+- [x] Botón **"Renovar con el proveedor"** en el detalle de la cuenta (solo
+      si está activa) y en cada fila de "Cuentas que debes pagar al
+      proveedor" del Inicio (fuera del link de la fila). Al renovar: aviso
+      con la nueva fecha; en el Inicio se recargan esa lista (la cuenta
+      sale) y la ganancia del mes; en el detalle, todo el detalle.
+- [x] Detalle de la cuenta: sección **"Pagos al proveedor"** (fecha de pago,
+      Compra/Renovación, lo pagado en soles y en su moneda si no es PEN,
+      método de pago) y la rentabilidad con el desglose ("Compra: S/ 40.00
+      · 2 renovaciones: S/ 87.50" / "Sin renovaciones todavía").
+- [x] Contabilidad: el ⓘ de "Pagado a proveedores" ahora dice que son
+      compras y renovaciones de cuentas según el día en que se pagó; el
+      gráfico "Cómo te fue en el tiempo" suma la barra "Pagado a
+      proveedores" (el timeline ahora la trae).
+- [x] `docs/glosario.md`: "Pagado a proveedores" actualizado; nuevos
+      "Costo de la renovación", "Pagos al proveedor", "Renovar con el
+      proveedor", "Fecha de pago" y "Vence ahora el".
+
+### Verificación
+
+- [x] `nocturne-api`: `npm run lint`, `npm run build`, `npm test` (275
+      tests; antes 265) y `npm run test:e2e` (125 tests; antes 108) pasan
+- [x] `nocturne-web`: `npm run lint`, `npm test` (580 tests; antes 556) y
+      `npm run build` (producción) pasan
+- [x] Probado contra el backend local con Chromium (script con
+      playwright-core; el MCP de Playwright no arranca por falta de Chrome):
+      renovar desde el Inicio a 1280px (prefill del último pago, la cuenta
+      sale de la lista) y desde el detalle a 390px (error de fecha no
+      posterior con el botón deshabilitado, historial con 3 pagos,
+      desglose, sin scroll horizontal ni errores de consola). Datos de
+      prueba borrados después.

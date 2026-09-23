@@ -18,6 +18,7 @@ import { CreateAccountDto } from './dto/create-account.dto.js';
 import { UpdateAccountDto } from './dto/update-account.dto.js';
 import { QueryAccountDto } from './dto/query-account.dto.js';
 import { QueryPorRenovarDto } from './dto/query-por-renovar.dto.js';
+import { RenewProviderDto } from './dto/renew-provider.dto.js';
 
 const DIAS_POR_RENOVAR_DEFAULT = 7;
 
@@ -59,6 +60,15 @@ export class AccountsController {
     return this.accountsService.rentabilidad(id, currentUser);
   }
 
+  // Historial de pagos al proveedor (compra inicial + renovaciones).
+  @Get(':id/provider-payments')
+  providerPayments(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ) {
+    return this.accountsService.providerPayments(id, currentUser);
+  }
+
   @Get(':id')
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
@@ -90,6 +100,16 @@ export class AccountsController {
     @CurrentUser() currentUser: AuthenticatedUser,
   ) {
     return this.accountsService.softDelete(id, currentUser);
+  }
+
+  // Renovación con el proveedor: pago RENOVACION + nueva fechaFin, atómico.
+  @Post(':id/renew-provider')
+  renewProvider(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RenewProviderDto,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ) {
+    return this.accountsService.renewProvider(id, dto, currentUser);
   }
 
   @Patch(':id/reactivate')

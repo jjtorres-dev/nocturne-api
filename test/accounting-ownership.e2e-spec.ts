@@ -116,6 +116,9 @@ describe('Accounting — ownership entre usuarios (e2e)', () => {
       ]);
     }
     if (createdAccountIds.length > 0) {
+      await dataSource.query('DELETE FROM account_payments WHERE cuenta_id = ANY($1)', [
+        createdAccountIds,
+      ]);
       await dataSource.query('DELETE FROM accounts WHERE id = ANY($1)', [
         createdAccountIds,
       ]);
@@ -184,9 +187,8 @@ describe('Accounting — ownership entre usuarios (e2e)', () => {
     return res.body;
   }
 
-  // costo -> "inversion". createdAt se backdatea a `fecha` a mano (la API
-  // no lo expone, lo pone @CreateDateColumn) — mismo truco que
-  // accounting.e2e-spec.ts.
+  // costo -> "inversion": el pago compra_inicial que crea la API tiene
+  // fecha=fechaInicio=`fecha` (createdAt ya no cuenta para Contabilidad).
   async function createAccount(
     accessToken: string,
     servicioId: string,
@@ -207,10 +209,6 @@ describe('Accounting — ownership entre usuarios (e2e)', () => {
       })
       .expect(201);
     createdAccountIds.push(res.body.id);
-    await dataSource.query('UPDATE accounts SET created_at = $1 WHERE id = $2', [
-      fecha,
-      res.body.id,
-    ]);
     return res.body;
   }
 

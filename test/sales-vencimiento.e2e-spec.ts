@@ -135,6 +135,7 @@ describe('Sales vencimiento (e2e)', () => {
     await dataSource.query('DELETE FROM profiles WHERE cuenta_id = $1', [
       cuentaId,
     ]);
+    await dataSource.query('DELETE FROM account_payments WHERE cuenta_id = $1', [cuentaId]);
     await dataSource.query('DELETE FROM accounts WHERE id = $1', [cuentaId]);
     await dataSource.query('DELETE FROM contacts WHERE id = $1', [clienteId]);
     await dataSource.query('DELETE FROM services WHERE id = $1', [

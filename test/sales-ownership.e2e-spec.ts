@@ -95,6 +95,9 @@ describe('Sales — ownership entre usuarios (e2e)', () => {
         'DELETE FROM profiles WHERE cuenta_id = ANY($1)',
         [createdAccountIds],
       );
+      await dataSource.query('DELETE FROM account_payments WHERE cuenta_id = ANY($1)', [
+        createdAccountIds,
+      ]);
       await dataSource.query('DELETE FROM accounts WHERE id = ANY($1)', [
         createdAccountIds,
       ]);

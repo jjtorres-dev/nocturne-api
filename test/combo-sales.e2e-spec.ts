@@ -149,6 +149,10 @@ describe('Combo sales (e2e)', () => {
       await dataSource.query('DELETE FROM sales WHERE id = $1', [id]);
     }
     await dataSource.query('DELETE FROM combos WHERE id = $1', [comboId]);
+    await dataSource.query('DELETE FROM account_payments WHERE cuenta_id IN ($1, $2)', [
+      cuentaAId,
+      cuentaBId,
+    ]);
     await dataSource.query('DELETE FROM accounts WHERE id IN ($1, $2)', [
       cuentaAId,
       cuentaBId,

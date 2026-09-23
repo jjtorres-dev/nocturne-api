@@ -225,6 +225,9 @@ describe('Bloque C — rentabilidad, inventario y cuentas por renovar (e2e)', ()
       await dataSource.query('DELETE FROM profiles WHERE cuenta_id = ANY($1)', [
         createdAccountIds,
       ]);
+      await dataSource.query('DELETE FROM account_payments WHERE cuenta_id = ANY($1)', [
+        createdAccountIds,
+      ]);
       await dataSource.query('DELETE FROM accounts WHERE id = ANY($1)', [
         createdAccountIds,
       ]);
@@ -401,6 +404,7 @@ describe('Bloque C — rentabilidad, inventario y cuentas por renovar (e2e)', ()
       const r = await getRentabilidad(userA.accessToken, cuentaRentable.id);
       expect(r).toEqual({
         costo: 40,
+        desgloseCosto: { compraInicial: 40, renovaciones: 0, cantidadRenovaciones: 0 },
         perfilesTotal: 4,
         // 2 ventas sueltas + 1 venta hija de combo ocupan perfiles.
         perfilesVendidos: 3,
@@ -419,6 +423,7 @@ describe('Bloque C — rentabilidad, inventario y cuentas por renovar (e2e)', ()
       const r = await getRentabilidad(userA.accessToken, cuentaSinVentas.id);
       expect(r).toEqual({
         costo: 100,
+        desgloseCosto: { compraInicial: 100, renovaciones: 0, cantidadRenovaciones: 0 },
         perfilesTotal: 3,
         perfilesVendidos: 0,
         usaPerfiles: true,
@@ -433,6 +438,7 @@ describe('Bloque C — rentabilidad, inventario y cuentas por renovar (e2e)', ()
       const r = await getRentabilidad(userA.accessToken, cuentaCompletaCombo.id);
       expect(r).toEqual({
         costo: 10,
+        desgloseCosto: { compraInicial: 10, renovaciones: 0, cantidadRenovaciones: 0 },
         perfilesTotal: 0,
         perfilesVendidos: 0,
         usaPerfiles: false,

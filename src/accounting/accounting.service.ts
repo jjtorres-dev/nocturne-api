@@ -134,29 +134,40 @@ export class AccountingService {
   ): Promise<TimelinePoint[]> {
     const ownerId = this.resolveOwnerId(currentUser, viewOwnerId);
     const { desde, hasta } = resolveRango(desdeInput, hastaInput);
-    const [ingresosPorPeriodo, gastosPorPeriodo] = await Promise.all([
-      this.paymentsService.sumMontoPENByPeriodo(desde, hasta, groupBy, ownerId),
-      this.expensesService.sumMontoPENByPeriodo(desde, hasta, groupBy, ownerId),
-    ]);
+    const [ingresosPorPeriodo, inversionPorPeriodo, gastosPorPeriodo] =
+      await Promise.all([
+        this.paymentsService.sumMontoPENByPeriodo(desde, hasta, groupBy, ownerId),
+        this.accountsService.sumCostoByPeriodo(desde, hasta, groupBy, ownerId),
+        this.expensesService.sumMontoPENByPeriodo(desde, hasta, groupBy, ownerId),
+      ]);
 
     const ingresosByPeriodo = new Map(
       ingresosPorPeriodo.map((r) => [r.periodo, r.ingresos]),
+    );
+    const inversionByPeriodo = new Map(
+      inversionPorPeriodo.map((r) => [r.periodo, r.inversion]),
     );
     const gastosByPeriodo = new Map(
       gastosPorPeriodo.map((r) => [r.periodo, r.gastos]),
     );
     const periodos = Array.from(
-      new Set([...ingresosByPeriodo.keys(), ...gastosByPeriodo.keys()]),
+      new Set([
+        ...ingresosByPeriodo.keys(),
+        ...inversionByPeriodo.keys(),
+        ...gastosByPeriodo.keys(),
+      ]),
     ).sort();
 
     return periodos.map((periodo) => {
       const ingresos = ingresosByPeriodo.get(periodo) ?? 0;
+      const inversion = inversionByPeriodo.get(periodo) ?? 0;
       const gastos = gastosByPeriodo.get(periodo) ?? 0;
       return {
         periodo,
         ingresos,
+        inversion,
         gastos,
-        ganancia: round2(ingresos - gastos),
+        ganancia: round2(ingresos - inversion - gastos),
       };
     });
   }

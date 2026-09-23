@@ -1,16 +1,26 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, IsNull, Not, Repository } from 'typeorm';
+import { DataSource, EntityManager, IsNull, Not, Repository } from 'typeorm';
 import { Account } from './entities/account.entity.js';
 import { Profile } from './profiles/entities/profile.entity.js';
+import { AccountPayment } from './entities/account-payment.entity.js';
+import { AccountPaymentType } from './account-payment-type.enum.js';
 import { CreateAccountDto } from './dto/create-account.dto.js';
 import { UpdateAccountDto } from './dto/update-account.dto.js';
+import { RenewProviderDto } from './dto/renew-provider.dto.js';
 import { QueryAccountDto } from './dto/query-account.dto.js';
 import type { AccountListItem } from './account-list-item.js';
 import type { AccountRentabilidad } from './account-rentabilidad.js';
 import type { AccountPorRenovar } from './account-por-renovar.js';
 import { Payment } from '../payments/entities/payment.entity.js';
 import { Sale } from '../sales/entities/sale.entity.js';
+import { Moneda } from '../sales/moneda.enum.js';
+import { todayIso } from '../sales/date.util.js';
+import { TimelineGroupBy } from '../common/timeline-group-by.enum.js';
 import { ServiceType } from '../services/service-type.enum.js';
 import { ServicesService } from '../services/services.service.js';
 import { ContactsService } from '../contacts/contacts.service.js';
@@ -23,6 +33,15 @@ export interface ServicioInversion {
   servicioId: string;
   inversion: number;
 }
+
+export interface PeriodoInversion {
+  periodo: string;
+  inversion: number;
+}
+
+// Campos de la cuenta que determinan su pago COMPRA_INICIAL: si un PATCH
+// toca alguno, ese pago se resincroniza en la misma transacción.
+const CAMPOS_COMPRA_INICIAL = ['costo', 'fechaInicio', 'metodoPago'] as const;
 
 // Solo id/name/email del dueño en el join, nunca el resto de User (ni por
 // accidente el password_hash) — mismo criterio que Servicios/Contactos.
@@ -95,36 +114,36 @@ export class AccountsService {
     const { crearPerfiles, ...accountData } = dto;
 
     // Perfiles automáticos: sin pantallasMax (servicio SIN_PERFILES) no hay
-    // nada que generar, se ignora en silencio — no hace falta transacción
-    // para una sola escritura.
+    // nada que generar, se ignora en silencio.
     const servicio = crearPerfiles
       ? await this.servicesService.findOne(dto.servicioId)
       : null;
-    if (!servicio?.pantallasMax) {
-      const account = this.accountsRepository.create({
-        ...accountData,
-        ownerId: currentUser.id,
-      });
-      return this.accountsRepository.save(account);
-    }
+    const pantallasMax = servicio?.pantallasMax ?? 0;
 
-    // Cuenta + "Perfil 1".."Perfil N" en la MISMA transacción (ver
-    // PROGRESS.md): si cualquier perfil falla al guardarse, la cuenta
-    // tampoco queda creada.
-    const pantallasMax = servicio.pantallasMax;
+    // Cuenta + su pago COMPRA_INICIAL (+ "Perfil 1".."Perfil N" si se
+    // pidieron) en la MISMA transacción: si cualquiera falla, no queda
+    // nada a medias.
     return this.dataSource.transaction(async (manager) => {
       const account = manager.create(Account, {
         ...accountData,
         ownerId: currentUser.id,
       });
       const saved = await manager.save(account);
-      const perfiles = Array.from({ length: pantallasMax }, (_, i) =>
-        manager.create(Profile, {
+      await manager.save(
+        manager.create(AccountPayment, {
           cuentaId: saved.id,
-          nombre: `Perfil ${i + 1}`,
+          ...this.compraInicialDe(saved),
         }),
       );
-      await manager.save(perfiles);
+      if (pantallasMax > 0) {
+        const perfiles = Array.from({ length: pantallasMax }, (_, i) =>
+          manager.create(Profile, {
+            cuentaId: saved.id,
+            nombre: `Perfil ${i + 1}`,
+          }),
+        );
+        await manager.save(perfiles);
+      }
       return saved;
     });
   }
@@ -270,8 +289,74 @@ export class AccountsService {
       existing.ownerId,
     );
     // Ver nota en ServicesService.update: nunca Object.assign(entity, dto).
-    await this.accountsRepository.update(id, dto);
+    const tocaCompraInicial = CAMPOS_COMPRA_INICIAL.some(
+      (campo) => dto[campo] !== undefined,
+    );
+    if (!tocaCompraInicial) {
+      await this.accountsRepository.update(id, dto);
+    } else {
+      // Cuenta y su pago COMPRA_INICIAL juntos: Contabilidad nunca ve un
+      // costo o una fecha de compra distintos a los de la cuenta.
+      await this.dataSource.transaction(async (manager) => {
+        await manager.update(Account, id, dto);
+        await this.syncCompraInicial(manager, id, {
+          costo: dto.costo ?? existing.costo,
+          fechaInicio: dto.fechaInicio ?? existing.fechaInicio,
+          metodoPago: dto.metodoPago ?? existing.metodoPago,
+        });
+      });
+    }
     return this.findOneOwned(id, currentUser);
+  }
+
+  // El revendedor le pagó al proveedor otro periodo de la cuenta: crea el
+  // pago RENOVACION y mueve la fecha de vencimiento en UNA transacción (si
+  // una de las dos escrituras falla, no queda ninguna). Mismo scoping que
+  // el detalle (findOneOwned → 404 si es ajena).
+  async renewProvider(
+    id: string,
+    dto: RenewProviderDto,
+    currentUser: AuthenticatedUser,
+  ): Promise<Account> {
+    const account = await this.findOneOwned(id, currentUser);
+    // Ambas 'YYYY-MM-DD': la comparación de strings es cronológica.
+    const nuevaFechaFin = dto.nuevaFechaFin.slice(0, 10);
+    if (nuevaFechaFin <= account.fechaFin) {
+      throw new BadRequestException(
+        `La nueva fecha de vencimiento (${nuevaFechaFin}) tiene que ser posterior a la actual (${account.fechaFin}).`,
+      );
+    }
+    const tasaCambio = dto.tasaCambio ?? 1;
+
+    await this.dataSource.transaction(async (manager) => {
+      await manager.save(
+        manager.create(AccountPayment, {
+          cuentaId: id,
+          fecha: dto.fechaPago?.slice(0, 10) ?? todayIso(),
+          monto: dto.monto,
+          moneda: dto.moneda,
+          tasaCambio,
+          montoPEN: round2(dto.monto * tasaCambio),
+          metodoPago: dto.metodoPago,
+          tipo: AccountPaymentType.RENOVACION,
+        }),
+      );
+      await manager.update(Account, id, { fechaFin: nuevaFechaFin });
+    });
+    return this.findOneOwned(id, currentUser);
+  }
+
+  // Historial de pagos al proveedor de la cuenta (compra inicial +
+  // renovaciones), del más reciente al más antiguo.
+  async providerPayments(
+    id: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<AccountPayment[]> {
+    await this.findOneOwned(id, currentUser);
+    return this.dataSource.getRepository(AccountPayment).find({
+      where: { cuentaId: id },
+      order: { fecha: 'DESC', createdAt: 'DESC' },
+    });
   }
 
   async softDelete(id: string, currentUser: AuthenticatedUser): Promise<Account> {
@@ -298,7 +383,7 @@ export class AccountsService {
       servicio.tipo === ServiceType.CON_PERFILES ||
       servicio.tipo === ServiceType.FAMILIAR;
 
-    const [perfiles, ingresosRow, ventasCombo] = await Promise.all([
+    const [perfiles, ingresosRow, ventasCombo, costoRow] = await Promise.all([
       this.profilesRepository
         .createQueryBuilder('profile')
         .select('COUNT(*)', 'total')
@@ -320,19 +405,54 @@ export class AccountsService {
       this.dataSource
         .getRepository(Sale)
         .count({ where: { cuentaId: id, ventaComboId: Not(IsNull()) } }),
+      // Costo = todo lo pagado al proveedor por la cuenta (compra inicial +
+      // renovaciones), en PEN.
+      this.dataSource
+        .getRepository(AccountPayment)
+        .createQueryBuilder('ap')
+        .select(
+          'COALESCE(SUM(ap.montoPEN) FILTER (WHERE ap.tipo = :compra), 0)',
+          'compraInicial',
+        )
+        .addSelect(
+          'COALESCE(SUM(ap.montoPEN) FILTER (WHERE ap.tipo = :renovacion), 0)',
+          'renovaciones',
+        )
+        .addSelect(
+          'COUNT(*) FILTER (WHERE ap.tipo = :renovacion)',
+          'cantidadRenovaciones',
+        )
+        .where('ap.cuentaId = :id', { id })
+        .setParameters({
+          compra: AccountPaymentType.COMPRA_INICIAL,
+          renovacion: AccountPaymentType.RENOVACION,
+        })
+        .getRawOne<{
+          compraInicial: string;
+          renovaciones: string;
+          cantidadRenovaciones: string;
+        }>(),
     ]);
 
     const perfilesTotal = parseInt(perfiles?.total ?? '0', 10);
     const perfilesVendidos = parseInt(perfiles?.vendidos ?? '0', 10);
     const ingresos = round2(parseFloat(ingresosRow?.total ?? '0'));
     const unidades = usaPerfiles ? perfilesTotal : 1;
+    const compraInicial = round2(parseFloat(costoRow?.compraInicial ?? '0'));
+    const renovaciones = round2(parseFloat(costoRow?.renovaciones ?? '0'));
+    const costo = round2(compraInicial + renovaciones);
     return {
-      costo: account.costo,
+      costo,
+      desgloseCosto: {
+        compraInicial,
+        renovaciones,
+        cantidadRenovaciones: parseInt(costoRow?.cantidadRenovaciones ?? '0', 10),
+      },
       perfilesTotal,
       perfilesVendidos,
       usaPerfiles,
       ingresos,
-      ganancia: round2(ingresos - account.costo),
+      ganancia: round2(ingresos - costo),
       potencial: round2(servicio.precioBase * unidades),
       ventasCombo,
     };
@@ -399,28 +519,38 @@ export class AccountsService {
     await this.accountsRepository.update(id, { clienteId });
   }
 
-  // "inversion" en Fase 5 (Contabilidad): la fecha relevante es cuándo se
-  // compró la cuenta (createdAt), no fechaInicio/fechaFin del período de
-  // uso. Incluye cuentas desactivadas a propósito: el costo ya se pagó
-  // aunque la cuenta luego se haya dado de baja.
+  // "inversion" de Contabilidad ("Pagado a proveedores"): la suma de los
+  // pagos al proveedor (compras iniciales + renovaciones, en PEN) según la
+  // FECHA EN QUE SE PAGARON — ya no Account.costo según createdAt, que
+  // contaba la compra en el mes en que se registró la cuenta. Incluye
+  // cuentas desactivadas a propósito: lo pagado se pagó igual.
   // ownerId undefined = sin filtro (vista "todo el negocio" del admin, ver
-  // AccountingService.resolveOwnerId).
+  // AccountingService.resolveOwnerId); el dueño sale de la cuenta, igual
+  // que Payment con Sale.
+  private pagosProveedorEnRango(
+    desde: string,
+    hasta: string,
+    ownerId: string | undefined,
+  ) {
+    const qb = this.dataSource
+      .getRepository(AccountPayment)
+      .createQueryBuilder('ap')
+      .innerJoin('ap.cuenta', 'account')
+      .where('ap.fecha BETWEEN :desde AND :hasta', { desde, hasta });
+    if (ownerId) {
+      qb.andWhere('account.ownerId = :ownerId', { ownerId });
+    }
+    return qb;
+  }
+
   async sumCosto(
     desde: string,
     hasta: string,
     ownerId?: string,
   ): Promise<number> {
-    const qb = this.accountsRepository
-      .createQueryBuilder('account')
-      .select('COALESCE(SUM(account.costo), 0)', 'total')
-      .where('CAST(account.createdAt AS date) BETWEEN :desde AND :hasta', {
-        desde,
-        hasta,
-      });
-    if (ownerId) {
-      qb.andWhere('account.ownerId = :ownerId', { ownerId });
-    }
-    const result = await qb.getRawOne<{ total: string }>();
+    const result = await this.pagosProveedorEnRango(desde, hasta, ownerId)
+      .select('COALESCE(SUM(ap.montoPEN), 0)', 'total')
+      .getRawOne<{ total: string }>();
     return round2(parseFloat(result?.total ?? '0'));
   }
 
@@ -429,23 +559,74 @@ export class AccountsService {
     hasta: string,
     ownerId?: string,
   ): Promise<ServicioInversion[]> {
-    const qb = this.accountsRepository
-      .createQueryBuilder('account')
+    const rows = await this.pagosProveedorEnRango(desde, hasta, ownerId)
       .select('account.servicioId', 'servicioId')
-      .addSelect('SUM(account.costo)', 'inversion')
-      .where('CAST(account.createdAt AS date) BETWEEN :desde AND :hasta', {
-        desde,
-        hasta,
-      })
-      .groupBy('account.servicioId');
-    if (ownerId) {
-      qb.andWhere('account.ownerId = :ownerId', { ownerId });
-    }
-    const rows = await qb.getRawMany<{ servicioId: string; inversion: string }>();
+      .addSelect('SUM(ap.montoPEN)', 'inversion')
+      .groupBy('account.servicioId')
+      .getRawMany<{ servicioId: string; inversion: string }>();
     return rows.map((row) => ({
       servicioId: row.servicioId,
       inversion: round2(parseFloat(row.inversion)),
     }));
+  }
+
+  // `groupBy` se interpola directo por el mismo motivo que en
+  // PaymentsService.sumMontoPENByPeriodo (enum validado, 3 valores fijos).
+  async sumCostoByPeriodo(
+    desde: string,
+    hasta: string,
+    groupBy: TimelineGroupBy,
+    ownerId?: string,
+  ): Promise<PeriodoInversion[]> {
+    const rows = await this.pagosProveedorEnRango(desde, hasta, ownerId)
+      .select(
+        `to_char(date_trunc('${groupBy}', ap.fecha), 'YYYY-MM-DD')`,
+        'periodo',
+      )
+      .addSelect('SUM(ap.montoPEN)', 'inversion')
+      .groupBy('periodo')
+      .orderBy('periodo', 'ASC')
+      .getRawMany<{ periodo: string; inversion: string }>();
+    return rows.map((row) => ({
+      periodo: row.periodo,
+      inversion: round2(parseFloat(row.inversion)),
+    }));
+  }
+
+  // Valores del pago COMPRA_INICIAL a partir de la cuenta: Account.costo
+  // está en PEN, así que el pago es PEN con tasa 1; la fecha es cuándo se
+  // compró la cuenta (fechaInicio), no cuándo se registró.
+  private compraInicialDe(
+    cuenta: Pick<Account, 'costo' | 'fechaInicio' | 'metodoPago'>,
+  ) {
+    return {
+      fecha: cuenta.fechaInicio.slice(0, 10),
+      monto: cuenta.costo,
+      moneda: Moneda.PEN,
+      tasaCambio: 1,
+      montoPEN: round2(cuenta.costo),
+      metodoPago: cuenta.metodoPago,
+      tipo: AccountPaymentType.COMPRA_INICIAL,
+    };
+  }
+
+  // Deja el pago COMPRA_INICIAL igual a la cuenta. Si por algún motivo no
+  // existe (no debería: la migración AddAccountPayments hizo el backfill y
+  // create() lo genera siempre), lo crea en vez de fallar.
+  private async syncCompraInicial(
+    manager: EntityManager,
+    cuentaId: string,
+    cuenta: Pick<Account, 'costo' | 'fechaInicio' | 'metodoPago'>,
+  ): Promise<void> {
+    const valores = this.compraInicialDe(cuenta);
+    const result = await manager.update(
+      AccountPayment,
+      { cuentaId, tipo: AccountPaymentType.COMPRA_INICIAL },
+      valores,
+    );
+    if (!result.affected) {
+      await manager.save(manager.create(AccountPayment, { cuentaId, ...valores }));
+    }
   }
 
   private async withPerfilesCount<T extends { id: string }>(

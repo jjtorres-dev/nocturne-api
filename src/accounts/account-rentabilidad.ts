@@ -1,6 +1,13 @@
 // Respuesta de GET /accounts/:id/rentabilidad (Bloque C). Todo en PEN.
 export interface AccountRentabilidad {
+  // Todo lo pagado al proveedor por la cuenta (compra inicial +
+  // renovaciones, suma de AccountPayment.montoPEN), y su desglose.
   costo: number;
+  desgloseCosto: {
+    compraInicial: number;
+    renovaciones: number;
+    cantidadRenovaciones: number;
+  };
   // Perfiles activos de la cuenta / los que tienen cliente asignado.
   // Siempre 0/0 en servicios sin perfiles (SIN_PERFILES/IPTV): ver
   // `usaPerfiles`.
