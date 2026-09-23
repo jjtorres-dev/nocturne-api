@@ -2623,11 +2623,6 @@ había quedado en el bloque de textos.
 - `nocturne-web` `84eb01f` feat: add renew-with-provider dialog, provider
   payment history and cost breakdown
 
-### Pendiente
-
-- [ ] `sumarMeses` desborda a fin de mes (31/01 + 1 mes = 03/03); unificar
-      con `sumarMesesSinDesbordar` en frontend y backend.
-
 ### Verificación
 
 - [x] `nocturne-api`: `npm run lint`, `npm run build`, `npm test` (275
