@@ -2408,3 +2408,94 @@ el buscador global de arriba, sin tocar el backend.
 - [x] Probado manualmente en el navegador contra el backend local
       (tarjeta de rentabilidad en el detalle de Cuenta y las 3 tarjetas
       nuevas del Dashboard)
+
+## Textos para revendedores: reescritura del panel, estado Vencida y fix de Cliente asignado (`nocturne-web`) — ✅ completa, commiteada y pusheada a `origin/main` (2026-09-23)
+
+Motivo: feedback de un revendedor real que puso en "Precio base" de
+Servicios lo que le paga al proveedor por la cuenta, cuando ese campo es lo
+que él cobra a su cliente por un perfil. Los textos del panel estaban en
+lenguaje técnico, no en el de alguien que revende streaming. Solo cambian
+textos visibles: no se tocaron nombres de variables, campos de la API,
+rutas ni el backend.
+
+- [x] **Reescritura de textos** (`d22b4e6`) — títulos, campos, columnas,
+      botones, opciones de selects, estados vacíos, confirmaciones y
+      snackbars de todas las pantallas, en español de Perú simple y con los
+      mismos términos en todas partes: la **Cuenta** es lo que se compra al
+      proveedor y el **Perfil** lo que se vende al cliente. Ejemplos: "Precio
+      base" → "Precio de venta por perfil / por cupo / de la cuenta" (según
+      el tipo), "Costo" → "Costo de la cuenta", "Clave" → "Contraseña",
+      "Fecha de fin" → "Vence", "Precio" → "Cobrado", tipos de servicio
+      "Por perfiles / Plan familiar / Cuenta completa / IPTV", monedas con
+      código + nombre ("USD – Dólares", `MONEDA_LABELS`). En Ventas y Ventas
+      de combos "Desactivar" pasa a **"Finalizar venta"** y el estado a
+      Vigente / Finalizada; la confirmación aclara que el perfil (o la
+      cuenta) queda libre y que lo ya cobrado sigue contando en Contabilidad
+      (verificado: finalizar no toca los `Payment`).
+- [x] **Glosario** en `nocturne-web/docs/glosario.md` (`d22b4e6`) —
+      referencia de términos (qué significa cada uno y qué palabras no usar)
+      para cualquier texto nuevo o modificado. Reemplaza a la propuesta de
+      textos, que se borró.
+- [x] **Campo condicional de perfiles** en el formulario de Servicios
+      (`d22b4e6`) — "Perfiles por cuenta" (o "Cupos del plan" en plan
+      familiar) solo aparece en los tipos que se venden por perfil
+      (`CON_PERFILES`/`FAMILIAR`) y ahí es obligatorio (≥ 1). En cuenta
+      completa e IPTV se oculta, se deshabilita para no bloquear el form y
+      se manda `pantallasMax: null`.
+- [x] **Íconos ⓘ** (`d22b4e6`) — nuevos `InfoHint` + `InfoToggle`
+      (`shared/info-hint`): las explicaciones largas de los campos que se
+      prestan a confusión (precio de venta, costo de la cuenta, tipo de
+      cambio, renovación automática…) quedan ocultas y se muestran u ocultan
+      con click o toque en ⓘ. Funciona en celular, a diferencia de un tooltip
+      con hover. Se usan en Servicios, Cuentas, Ventas, Ventas de combos,
+      renovar, Vencimientos, Gastos y Contabilidad.
+- [x] **Menú lateral más ancho** (`d22b4e6`) — 240px → 256px (escritorio y
+      menú deslizable del celular). Ni así entraba "Clientes y proveedores"
+      (185.9px de texto en 183px), así que el espacio entre ícono y texto y
+      el padding derecho de cada item bajan de 16px a 12px. Medido en
+      Chromium a 1280px y 390px: los 11 textos del menú entran en una sola
+      línea, sin "…", sin acortar ninguno.
+- [x] **Estado Vencida + filtro "Sin finalizar"** (`808cea9`) — una venta
+      vencida que no se finalizó mostraba "Vigente", lo que contradecía a
+      Vencimientos. Ahora Ventas y Ventas de combos (tablas, tarjetas de
+      celular, detalle de combo y CSV) muestran **Vigente** (activa y vence
+      hoy o después), **Vencida** (activa y la fecha de vencimiento ya pasó,
+      con el mismo rojo que Vencimientos) o **Finalizada** (no activa).
+      Nuevo `shared/estado-venta` (`estadoVenta()` + chip); compara con
+      `hoyIso()` (fecha local, no UTC). Es solo presentación: el filtro de
+      Estado sigue siendo por `activo`, y su opción "Vigentes" se renombró a
+      **"Sin finalizar"** porque trae las vigentes y las vencidas no
+      finalizadas.
+- [x] **Fix de Cliente asignado** (`9f03968`) — la columna de los perfiles
+      en el detalle de Cuenta mostraba siempre "—". Era solo del frontend:
+      el template tenía "—" fijo, y el backend ya mandaba `Perfil.clienteId`
+      (lo llena al vender y lo limpia al finalizar). Ahora muestra el nombre
+      del cliente (y "—" en los perfiles libres). Test de regresión en
+      `cuenta-detail.spec.ts`.
+- [x] **Timeout del test lento** (`5de3637`) — el primer test de
+      `venta-create-dialog.spec.ts` (método de pago con `MatSelectHarness`)
+      pasó una vez los 5s con la suite completa. Tarda ~450ms: paga el
+      arranque en frío del archivo y abre un overlay real. Medido: no hay
+      timers reales ni render de más que optimizar, y apagar las animaciones
+      de Material no cambia nada. Se le subió el timeout a 15s solo a ese
+      test, con un comentario que explica por qué.
+
+### Commits (`nocturne-web`)
+
+- `9f03968` fix: show assigned client name on Cuenta profiles
+- `d22b4e6` feat: rewrite panel texts in reseller-friendly language
+  (glossary, info hints, conditional profiles field, wider sidebar)
+- `808cea9` feat: show Vencida state for expired unfinished sales and
+  rename filter to Sin finalizar
+- `5de3637` test: raise timeout for slow first test in venta-create spec
+
+### Pendiente
+
+- [ ] Contabilidad cuenta el costo de una cuenta en el mes en que se
+      registró, no en el que se compró — se corrige en el bloque de
+      renovación con el proveedor.
+
+### Verificación
+
+- [x] `nocturne-web`: `npm run lint`, `npm test` y `npm run build` pasan
+      antes de cada uno de los 4 commits (tests: 533 → 534 → 543 → 556)
