@@ -2819,3 +2819,83 @@ proveedor.
   day compensation for affected sales
 - `nocturne-web` `1f694dd` feat: add mark down, restore and unmark flows for
   accounts, down-account chips and Inicio card
+
+## Calendarios en español (`nocturne-web`) — ✅ completa, commiteada y pusheada a `origin/main` (2026-10-05)
+
+Feedback real: los calendarios de los campos de fecha salían en inglés.
+
+**Por qué el `lang` no bastaba**: los 15 campos eran `<input type="date">`
+nativos y su calendario lo dibuja el navegador con el idioma de SU
+interfaz, no con el de la página. Probado en Firefox 157 con la interfaz en
+`en-US`: con `<html lang="es-PE">` el calendario sigue saliendo "October
+2026 / Sun Mon Tue…", igual que con `lang="en"`. El `lang` quedó en
+`es-PE` igual (`2816abe`, es lo correcto para lectores de pantalla y
+corrector), pero no cambia el calendario. La única forma de que salga en
+español para cualquier persona y navegador es no usar el calendario nativo.
+
+- [x] **`app-fecha-field`** (`shared/fecha-field`): componente compartido
+      (ControlValueAccessor, auto-registrado como `MetodoPagoSelect`) que
+      envuelve el `mat-form-field` con un `mat-datepicker`. Entradas:
+      `label`, `hint`, `requiredError`, `min`, `max` y `errores` (mensajes
+      de los demás validadores del formulario por clave de error, p. ej.
+      `{ futura: 'No puede ser una fecha futura.' }`). Lo que se proyecte
+      (el `app-info-toggle` de "Vence con el proveedor") queda junto al
+      botón del calendario.
+- [x] **Los 15 campos** (no quedó ningún `<input type="date">`):
+      `cuenta-form-dialog` (fechaInicio, fechaFin),
+      `cuenta-renovar-proveedor-dialog` (fechaPago, nuevaFechaFin),
+      `cuenta-reponer-dialog` (fechaReposicion), `cuenta-marcar-caida-dialog`
+      (fechaCaida), `gasto-form-dialog` (fecha), `accounting` (desde, hasta),
+      `venta-create-dialog` (fechaInicio, fechaFin), `venta-edit-dialog`
+      (fechaFin), `venta-combo-create` (fechaInicio, fechaFin) y
+      `venta-combo-edit-dialog` (fechaFin).
+- [x] **Idioma y formato**: español de Perú (meses y días por `Intl` con
+      `MAT_DATE_LOCALE 'es-PE'`), semana desde el lunes, texto `dd/mm/aaaa`,
+      y los textos de los botones del calendario en español
+      (`MatDatepickerIntl`).
+- [x] **Adaptador propio** (`FechaDateAdapter`, extiende el nativo de
+      Material; **decisión**: sin sumar date-fns como dependencia): el nativo
+      lee lo escrito a mano con `Date.parse`, que entiende 05/03/2026 como 3
+      de mayo. El propio lee y arma siempre día/mes/año (acepta `5/3/2026` y
+      los separadores `/`, `-` y `.`) y rechaza fechas que no existen
+      (31/02).
+- [x] **Año de 4 dígitos**: `05/03/26` no es una fecha. Con 2 dígitos, a
+      medio escribir "05/03/20" ya sería el año 2020 y dispararía los
+      autocompletados de "Vence" con una fecha que nadie quiso poner.
+- [x] **El valor del formulario no cambió**: sigue siendo el string
+      `'YYYY-MM-DD'` (`''` si está vacío o a medio escribir). El `Date` vive
+      solo dentro del componente, armado con componentes locales — nunca
+      `toISOString` ni `new Date('YYYY-MM-DD')`, que corren un día en Perú
+      (UTC-5). `fecha.util.ts`, los autocompletados (incluido el criterio
+      dirty: escribir o elegir en el calendario marca dirty, un `patchValue`
+      no) y la API quedaron igual.
+- [x] **touchUi en celular**: por debajo del breakpoint de siempre
+      (`injectIsMobile`) el calendario se abre como diálogo táctil en vez de
+      desplegable.
+- [x] **Decisión**: el adaptador, `MAT_DATE_LOCALE` y el formato se proveen
+      en el componente, no en `app.config.ts`. `LOCALE_ID` no se tocó
+      (`SolesPipe`, montos, CSV y fechas de las listas siguen igual).
+- Cambios visibles respecto del campo nativo: cerrar el calendario sin
+  elegir en un campo obligatorio vacío muestra su error; un texto que no es
+  una fecha avisa "Escribe la fecha como día/mes/año, por ejemplo
+  05/03/2026."; y con `min`/`max` (marcar caída, reponer) una fecha fuera
+  de rango escrita a mano muestra un aviso.
+
+### Verificación
+
+- [x] `npm run lint`, `npm test` (667 tests; 19 nuevos en
+      `fecha-field.spec.ts`) y `npm run build` (producción) pasan. Los tests
+      de autocompletado y dirty de Cuentas, Ventas y Ventas de combos ahora
+      escriben en el campo nuevo con `dd/mm/aaaa`.
+- [x] Probado contra la app local en Firefox 157 real y Chromium 153, los dos
+      con la interfaz en `en-US`, a 1280px y a 390px, en Contabilidad y en
+      "Nuevo gasto": "MARZO DE 2026", lunes … domingo, desplegable en
+      escritorio y diálogo táctil a 390px; escribir 05/03/2026 marca el 5 de
+      marzo. Sin scroll horizontal. Revisado también por el usuario en el
+      navegador.
+
+### Commits
+
+- `nocturne-web` `2816abe` fix: set document language to es-PE
+- `nocturne-web` `a91f587` feat: replace native date inputs with Spanish
+  datepicker field
