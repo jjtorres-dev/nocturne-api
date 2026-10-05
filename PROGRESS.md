@@ -2794,8 +2794,6 @@ proveedor.
 - [x] Tests: 2 e2e más en `cuentas-caidas.e2e-spec.ts` (venta por perfil y
       de cuenta completa; venta de combo con la 1ra o la 2da cuenta caída) y
       2 unit (`sales.service.spec.ts`, `combo-sales.service.spec.ts`).
-- El frontend no cambió: ante ese 400 muestra el aviso genérico "No se pudo
-  reactivar la venta." (solo el 409 muestra el mensaje del backend).
 
 ### Verificación
 
