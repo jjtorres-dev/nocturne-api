@@ -30,3 +30,13 @@ export function addMonthsToDate(dateStr: string, months: number): string {
 export function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
+
+// Días calendario entre dos fechas 'YYYY-MM-DD' (hasta - desde; negativo si
+// `hasta` es anterior). En UTC para que no dependa de la zona del servidor.
+export function daysBetween(desde: string, hasta: string): number {
+  const utc = (fecha: string) => {
+    const [year, month, day] = fecha.split('-').map(Number);
+    return Date.UTC(year, month - 1, day);
+  };
+  return Math.round((utc(hasta) - utc(desde)) / 86_400_000);
+}

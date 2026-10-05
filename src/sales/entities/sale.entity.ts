@@ -137,6 +137,12 @@ export class Sale {
   @JoinColumn({ name: 'venta_combo_id' })
   ventaCombo: VentaCombo | null;
 
+  // No es una columna: lo completan SalesService/ComboSalesService en sus
+  // respuestas. true si la cuenta de la venta está caída (Account.
+  // fechaCaida no es null) — el cliente está sin servicio y no hay que
+  // cobrarle hasta que el proveedor la reponga.
+  cuentaCaida?: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

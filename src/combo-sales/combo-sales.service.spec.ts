@@ -100,7 +100,10 @@ describe('ComboSalesService', () => {
     update: ReturnType<typeof vi.fn>;
     query: ReturnType<typeof vi.fn>;
   };
-  let dataSource: { transaction: ReturnType<typeof vi.fn> };
+  let dataSource: {
+    transaction: ReturnType<typeof vi.fn>;
+    getRepository: ReturnType<typeof vi.fn>;
+  };
   let contactsService: { findOne: ReturnType<typeof vi.fn> };
   let combosService: { findOne: ReturnType<typeof vi.fn> };
   let comboSalesService: ComboSalesService;
@@ -126,6 +129,16 @@ describe('ComboSalesService', () => {
       transaction: vi.fn(async (cb: (m: typeof manager) => unknown) =>
         cb(manager),
       ),
+      // Consulta de withCuentaCaida: ningún combo con cuentas caídas.
+      getRepository: vi.fn(() => ({
+        createQueryBuilder: vi.fn(() => ({
+          innerJoin: vi.fn().mockReturnThis(),
+          select: vi.fn().mockReturnThis(),
+          where: vi.fn().mockReturnThis(),
+          andWhere: vi.fn().mockReturnThis(),
+          getRawMany: vi.fn().mockResolvedValue([]),
+        })),
+      })),
     };
     ventaCombosRepo = {
       find: vi.fn(),
@@ -392,6 +405,17 @@ describe('ComboSalesService', () => {
     });
   });
 
+  describe('create — cuenta caída', () => {
+    it('400 si la cuenta de una asignación está caída, sin crear nada', async () => {
+      manager.findOne.mockResolvedValueOnce({ ...cuentaA, fechaCaida: '2026-01-03' });
+
+      await expect(comboSalesService.create(createDto, revendedorA)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(manager.save).not.toHaveBeenCalled();
+    });
+  });
+
   describe('create — rollback (el caso crítico)', () => {
     it('409 si la PRIMERA asignación ya está ocupada: no crea nada', async () => {
       manager.findOne
@@ -578,6 +602,7 @@ describe('ComboSalesService', () => {
         { id: 'sale-a', cuentaId: 'cta-a', perfilId: null, codigoVenta: 'V-1' },
         { id: 'sale-b', cuentaId: 'cta-b', perfilId: 'per-b', codigoVenta: 'V-2' },
       ]);
+      manager.find.mockResolvedValueOnce([]); // ninguna cuenta caída
       // sale-a: libre; sale-b: perfil ya ocupado por otra venta.
       manager.findOne
         .mockResolvedValueOnce(null)
@@ -601,6 +626,7 @@ describe('ComboSalesService', () => {
       manager.find.mockResolvedValueOnce([
         { id: 'sale-b', cuentaId: 'cta-b', perfilId: 'per-b', codigoVenta: 'V-2' },
       ]);
+      manager.find.mockResolvedValueOnce([]); // ninguna cuenta caída
       manager.findOne.mockResolvedValueOnce({ id: 'sale-z', codigoVenta: 'V-99' });
 
       await expect(comboSalesService.reactivate('venta-combo-1', admin)).rejects.toThrow(
@@ -614,6 +640,7 @@ describe('ComboSalesService', () => {
       manager.find.mockResolvedValueOnce([
         { id: 'sale-a', cuentaId: 'cta-a', perfilId: null, clienteId: 'cli-1' },
       ]);
+      manager.find.mockResolvedValueOnce([]); // ninguna cuenta caída
       manager.findOne.mockResolvedValueOnce(null); // libre
 
       await comboSalesService.reactivate('venta-combo-1', revendedorA);
@@ -629,6 +656,20 @@ describe('ComboSalesService', () => {
         'venta-combo-1',
         { activo: true },
       );
+    });
+
+    it('rechaza reactivar si alguna cuenta del combo está caída, sin reactivar ninguna hija', async () => {
+      manager.findOne.mockResolvedValueOnce({ id: 'venta-combo-1' });
+      manager.find.mockResolvedValueOnce([
+        { id: 'sale-a', cuentaId: 'cta-a', perfilId: null, clienteId: 'cli-1' },
+        { id: 'sale-b', cuentaId: 'cta-b', perfilId: 'per-b', clienteId: 'cli-1' },
+      ]);
+      manager.find.mockResolvedValueOnce([{ id: 'cta-b', fechaCaida: '2026-01-03' }]);
+
+      await expect(
+        comboSalesService.reactivate('venta-combo-1', revendedorA),
+      ).rejects.toThrow('La cuenta está caída');
+      expect(manager.update).not.toHaveBeenCalled();
     });
 
     it('un REVENDEDOR no puede reactivar una VentaCombo ajena (404), sin abrir transacción', async () => {

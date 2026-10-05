@@ -2636,3 +2636,181 @@ había quedado en el bloque de textos.
       posterior con el botón deshabilitado, historial con 3 pagos,
       desglose, sin scroll horizontal ni errores de consola). Datos de
       prueba borrados después.
+
+## Cuentas caídas y reposición del proveedor (`nocturne-api` + `nocturne-web`) — 🚧 implementada y verificada, sin commitear (2026-10-04)
+
+Feedback real: a veces una cuenta del proveedor se cae para siempre y el
+proveedor la repone gratis con otra. Los clientes de esa cuenta tienen que
+recibir los días que estuvieron sin servicio, sumados a su misma fecha de
+vencimiento. Hasta ahora el sistema seguía contando esos días y mostraba a
+esos clientes "para cobrar".
+
+**Decisión de diseño**: la reposición NO crea una cuenta nueva. Se actualiza
+la MISMA cuenta (credenciales y perfiles nuevos), para que clientes, pagos y
+costo sigan juntos y Contabilidad no cambie. No se crea ningún pago al
+proveedor.
+
+### Backend (`nocturne-api`)
+
+- [x] **Migración `AddAccountDownAndSaleAdjustments`**: `accounts.fecha_caida`
+      (date, nullable — la cuenta está "caída" si no es null) y la tabla
+      `sale_adjustments` (`venta_id` / `venta_combo_id` nullable con el mismo
+      CHECK XOR que `payments`, `cuenta_id`, `tipo` enum — hoy solo
+      `compensacion` —, `dias`, `fecha_caida`, `fecha_reposicion`, `motivo`,
+      timestamps). FKs con `ON DELETE NO ACTION`. Sin `owner_id`: el dueño
+      sale de la venta/combo, igual que `payments`. `motivo` queda en null
+      por ahora (el `tipo` ya dice que es una compensación).
+- [x] **`POST /accounts/:id/mark-down`** `{ fechaCaida? }`: default hoy, 400
+      si es futura, `findOneOwned` (404 si es ajena). **Decisión**: marcar una
+      cuenta que ya estaba caída corrige la fecha, no es error.
+- [x] **`POST /accounts/:id/restore`** `{ correo, claveServicio?,
+      claveCorreo?, perfiles?: [{ id, nombre?, pin? }], fechaReposicion?,
+      diasCompensacion? }`. 400 si la cuenta no está caída. En UNA
+      transacción (con la fila de la cuenta bloqueada, así dos reposiciones a
+      la vez no compensan doble): credenciales (cifradas por el transformer
+      de siempre) y perfiles indicados; `fechaFin += dias` a cada venta
+      activa suelta de la cuenta, con su fila en `sale_adjustments`; por cada
+      venta de combo activa con una hija en la cuenta, `fechaFin += dias` al
+      combo y a TODAS sus hijas, una sola vez por combo, con un ajuste con
+      `ventaComboId`; y `fecha_caida = null`. Devuelve la cuenta más
+      `compensacion: { dias, fechaCaida, fechaReposicion, ventas, combos,
+      clientes }`.
+  - `diasCompensacion` default = `fechaReposicion − fechaCaida`, entero ≥ 0.
+    `fechaReposicion` default hoy; 400 si es futura o anterior a la caída.
+  - Lo que no viene en el body (claves, perfiles) queda como estaba; un
+    `pin: null` borra el PIN. Un perfil de otra cuenta → 404 y no se aplica
+    nada.
+  - **Decisión**: con `diasCompensacion = 0` la cuenta se repone igual, pero
+    no se tocan fechas ni se registran ajustes de "+0 días".
+- [x] **`cuentaCaida` (boolean) en cada venta** de `GET /sales` (también con
+      `?vencimiento=`) y `GET /sales/:id`; y en cada venta de combo de
+      `GET /combo-sales` y `/:id` (true si alguna hija activa está en una
+      cuenta caída). Una sola consulta por listado
+      (`AccountsService.idsCaidas`).
+- [x] **`GET /accounts/caidas`** para el Inicio (**decisión**: endpoint nuevo
+      al lado de `/accounts/por-renovar`, no dentro de
+      `/dashboard/inventario`, porque el Inicio necesita la lista con link a
+      cada cuenta y no solo el conteo): `{ id, correo, servicioId,
+      servicioNombre, fechaCaida, diasCaida, clientesAfectados, ownerName? }`,
+      mismo scoping que `findAllOwned`. `fechaCaida` también viaja en el
+      listado y el detalle de cuentas.
+- [x] **Historial de ajustes**: `GET /sales/:id/adjustments` (de una venta
+      hija de combo devuelve los del combo) y
+      `GET /combo-sales/:id/adjustments`, con el scoping del detalle (404).
+- [x] Tests:
+  - e2e nuevo `test/cuentas-caidas.e2e-spec.ts` (12 tests, usuarios reales y
+    JWT real, contra Postgres): mark-down (default hoy, 400 futura/inválida,
+    404 ajena, 401, el admin sí puede); `cuentaCaida` en `/sales`,
+    `/sales?vencimiento=`, `/sales/:id` y `/accounts/caidas` (scoping entre
+    revendedores); restore suma los días a cada venta activa y registra el
+    ajuste, actualiza credenciales y perfiles y las claves quedan cifradas en
+    la tabla; `diasCompensacion` editable y 0; **ventas finalizadas no se
+    compensan**; combo con una hija en la cuenta (se mueven el combo y todas
+    sus hijas, un solo ajuste); **combo con dos hijas en la cuenta se
+    compensa UNA sola vez** (+7, no +14 — por la API un combo lleva una
+    cuenta por servicio, así que la segunda hija se mueve por SQL);
+    **atomicidad** con una falla forzada dentro de la transacción (trigger
+    que rechaza el INSERT de los ajustes, lo último que se escribe: no cambia
+    ninguna fecha, credencial, perfil ni ajuste, y sin el trigger la misma
+    reposición pasa); 400 sobre una cuenta no caída (y al reponer dos veces),
+    404 sobre una ajena, 400 con datos inválidos, 404 con un perfil de otra
+    cuenta; **no se crea ningún pago** (ni al proveedor ni de cliente) y
+    summary / by-service / by-payment-method / timeline de Contabilidad y la
+    rentabilidad de la cuenta quedan idénticos.
+  - Unit: `daysBetween` (`date.util.spec.ts`); los mocks de
+    `sales.service.spec.ts` y `combo-sales.service.spec.ts` suman la
+    consulta de cuentas caídas.
+
+### Frontend (`nocturne-web`)
+
+- [x] **Detalle de cuenta**: botón "Marcar como caída"
+      (`cuenta-marcar-caida-dialog`, pide "Caída desde", hoy por defecto, no
+      futura). Si está caída: aviso arriba de todo con desde cuándo, los días
+      que lleva y cuántos clientes están sin servicio, y el botón "Reponer
+      cuenta".
+- [x] **Diálogo "Reponer cuenta"** (`cuenta-reponer-dialog`): correo de la
+      cuenta, contraseña de la cuenta, contraseña del correo, los perfiles
+      activos con nombre y PIN editables, fecha de reposición y "Días a
+      compensar" (precalculado de la caída a la reposición, sigue a la fecha
+      mientras no se escriba a mano). Dice exactamente qué va a pasar: "Se
+      sumarán N días a X clientes." Al terminar no se cierra: muestra "Se
+      sumaron N días a X clientes." y ofrece "Copiar datos" (correo y
+      contraseña nuevos + los días sumados) para avisar a los clientes.
+  - **Decisión**: el correo arranca vacío (la cuenta de reposición casi
+    siempre trae otro) y las contraseñas vacías significan "queda la de
+    antes". Solo viajan los perfiles que cambiaron.
+- [x] **Chip "Cuenta caída"** (`shared/cuenta-caida-chip`, ámbar) en Ventas y
+      Vencimientos, tabla y tarjetas de celular, y en Ventas de combos. En
+      Vencimientos esas ventas no muestran WhatsApp ni Renovar.
+- [x] **Inicio**: tarjeta "Cuentas caídas" con el total de clientes sin
+      servicio; cada fila lleva al detalle de la cuenta.
+- [x] **Historial de ajustes** (`shared/ajustes-venta`): "+N días por cuenta
+      caída del DD/MM" en el diálogo de editar venta (Ventas no tiene página
+      de detalle; es donde se ve y se toca "Vence") y en el detalle de la
+      venta de combo.
+- [x] Los días caída se cuentan con la fecha local (`diasEntre` en
+      `fecha.util`) en el detalle, el Inicio y el diálogo, para que los tres
+      digan el mismo número.
+- [x] `docs/glosario.md`: sección "Cuentas caídas" (Cuenta caída, Marcar como
+      caída, Caída desde, Reponer cuenta, Fecha de reposición, Días a
+      compensar, Clientes sin servicio, Días sumados al vencimiento).
+
+### Ajustes antes de commitear (2026-10-04)
+
+- [x] **Una cuenta caída no se vende**: `POST /sales` y `POST /combo-sales`
+      dan 400 ("La cuenta está caída…") si la cuenta —o la cuenta del perfil,
+      o cualquiera de las del combo— está caída, sin crear nada.
+      `/dashboard/inventario` ya no cuenta sus perfiles ni cuentas completas.
+      En el frontend, las cascadas de Nueva venta y Nueva venta de combo no
+      ofrecen cuentas caídas (`cuentasVendibles` en `cuenta.model`).
+- [x] **`GET /sales/summary`** (tarjetas vencidas / por vencer / al día del
+      Inicio) excluye las ventas con la cuenta caída y las hijas de un combo
+      que tenga cualquier hija activa en una cuenta caída (el combo sale
+      entero). `GET /sales?vencimiento=` las sigue trayendo, con
+      `cuentaCaida`.
+- [x] **`POST /accounts/:id/unmark-down`**: limpia `fecha_caida` sin tocar
+      fechas ni crear ajustes (400 si no está caída, 404 si es ajena). Botón
+      "Quitar marca de caída" en el aviso del detalle, con confirmación ("Usa
+      esto solo si la marcaste por error; si la cuenta se repuso, usa
+      «Reponer cuenta»."). Término nuevo en el glosario.
+- [x] Sin migración nueva: estos ajustes no cambian el esquema.
+- [x] Tests: 6 e2e más en `cuentas-caidas.e2e-spec.ts` (400 en venta sobre
+      perfil y sobre cuenta completa caída, y se vende otra vez al reponerla;
+      400 en venta de combo con la 1ra o la 2da cuenta caída sin crear nada;
+      inventario; summary con un revendedor nuevo — conteos exactos, el combo
+      entero afuera, la lista los sigue mostrando, y el admin tampoco los
+      cuenta —; unmark-down sin tocar fechas ni ajustes, 400/404/401), 2 unit
+      en `sales.service.spec.ts` / `combo-sales.service.spec.ts`, y 6 en el
+      frontend (cascadas, botón con confirmación, API).
+
+### Reactivar sobre una cuenta caída (2026-10-05)
+
+- [x] **`PATCH /sales/:id/reactivate`** y **`PATCH
+      /combo-sales/:id/reactivate`** dan 400 ("La cuenta está caída…") si la
+      cuenta de la venta —o cualquiera de las cuentas del combo— está caída,
+      igual que crear. No se reactiva nada: la venta (o el combo y todas sus
+      hijas) sigue finalizada y el perfil/cuenta, libre. Repuesta la cuenta
+      (o quitada la marca), se reactiva normalmente.
+- [x] Tests: 2 e2e más en `cuentas-caidas.e2e-spec.ts` (venta por perfil y
+      de cuenta completa; venta de combo con la 1ra o la 2da cuenta caída) y
+      2 unit (`sales.service.spec.ts`, `combo-sales.service.spec.ts`).
+- El frontend no cambió: ante ese 400 muestra el aviso genérico "No se pudo
+  reactivar la venta." (solo el 409 muestra el mensaje del backend).
+
+### Verificación
+
+- [x] `nocturne-api`: `npm run lint`, `npm run build`, `npm test` (291
+      tests; antes 281) y `npm run test:e2e` (145 tests; antes 125) pasan
+- [x] `nocturne-web`: `npm run lint`, `npm test` (645 tests; antes 589) y
+      `npm run build` (producción) pasan
+- [x] Probado contra el backend local con Chromium (script con
+      playwright-core): a 1280px marcar como caída, aviso del detalle,
+      tarjeta del Inicio y chips en Ventas y Vencimientos (sin WhatsApp ni
+      Renovar); a 390px tarjetas con chip, "Reponer cuenta" ("Se sumarán 5
+      días a 2 clientes."), "Copiar datos", el detalle ya sin aviso y el
+      historial "+5 días por cuenta caída del 29/09" en editar venta. Las dos
+      ventas pasaron de vencer el 03/10 y 06/10 al 08/10 y 11/10. Sin scroll
+      horizontal ni errores de consola. Datos de prueba borrados después.
+      (Prueba hecha antes de los ajustes de arriba; el botón "Quitar marca
+      de caída" y las cascadas quedaron cubiertos por tests, no por una
+      segunda pasada en navegador.)

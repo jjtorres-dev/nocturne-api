@@ -1,4 +1,4 @@
-import { addMonthsToDate } from './date.util.js';
+import { addMonthsToDate, daysBetween } from './date.util.js';
 
 describe('addMonthsToDate', () => {
   // Misma tabla que `sumarMeses` en nocturne-web (shared/fecha.util.spec.ts):
@@ -22,5 +22,18 @@ describe('addMonthsToDate', () => {
 
   it('no suma nada con 0 meses', () => {
     expect(addMonthsToDate('2026-01-05', 0)).toBe('2026-01-05');
+  });
+});
+
+describe('daysBetween', () => {
+  it.each([
+    ['2026-10-01', '2026-10-01', 0],
+    ['2026-10-01', '2026-10-05', 4],
+    ['2026-02-27', '2026-03-02', 3],
+    ['2028-02-27', '2028-03-02', 4],
+    ['2026-12-30', '2027-01-02', 3],
+    ['2026-10-05', '2026-10-01', -4],
+  ])('de %s a %s = %i días', (desde, hasta, expected) => {
+    expect(daysBetween(desde, hasta)).toBe(expected);
   });
 });

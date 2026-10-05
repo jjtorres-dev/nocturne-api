@@ -4,7 +4,14 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, IsNull, Not, Repository } from 'typeorm';
+import {
+  DataSource,
+  EntityManager,
+  In,
+  IsNull,
+  Not,
+  Repository,
+} from 'typeorm';
 import { Account } from './entities/account.entity.js';
 import { Profile } from './profiles/entities/profile.entity.js';
 import { AccountPayment } from './entities/account-payment.entity.js';
@@ -12,14 +19,20 @@ import { AccountPaymentType } from './account-payment-type.enum.js';
 import { CreateAccountDto } from './dto/create-account.dto.js';
 import { UpdateAccountDto } from './dto/update-account.dto.js';
 import { RenewProviderDto } from './dto/renew-provider.dto.js';
+import { MarkDownDto } from './dto/mark-down.dto.js';
+import { RestoreAccountDto } from './dto/restore-account.dto.js';
 import { QueryAccountDto } from './dto/query-account.dto.js';
 import type { AccountListItem } from './account-list-item.js';
 import type { AccountRentabilidad } from './account-rentabilidad.js';
 import type { AccountPorRenovar } from './account-por-renovar.js';
+import type { AccountCaida, AccountCompensacion } from './account-caida.js';
 import { Payment } from '../payments/entities/payment.entity.js';
 import { Sale } from '../sales/entities/sale.entity.js';
+import { SaleAdjustment } from '../sales/entities/sale-adjustment.entity.js';
+import { SaleAdjustmentType } from '../sales/sale-adjustment-type.enum.js';
+import { VentaCombo } from '../combo-sales/entities/venta-combo.entity.js';
 import { Moneda } from '../sales/moneda.enum.js';
-import { todayIso } from '../sales/date.util.js';
+import { daysBetween, todayIso } from '../sales/date.util.js';
 import { TimelineGroupBy } from '../common/timeline-group-by.enum.js';
 import { ServiceType } from '../services/service-type.enum.js';
 import { ServicesService } from '../services/services.service.js';
@@ -67,6 +80,7 @@ const LIST_SELECT = {
   url: true,
   renovacionAutomatica: true,
   activo: true,
+  fechaCaida: true,
   createdAt: true,
   updatedAt: true,
 } as const;
@@ -344,6 +358,270 @@ export class AccountsService {
       await manager.update(Account, id, { fechaFin: nuevaFechaFin });
     });
     return this.findOneOwned(id, currentUser);
+  }
+
+  // Bloque — Cuentas caídas: la cuenta dejó de funcionar. Solo guarda desde
+  // cuándo; los días de sus clientes se compensan recién en restore().
+  // Marcar una cuenta que ya estaba caída corrige la fecha (no es error).
+  async markDown(
+    id: string,
+    dto: MarkDownDto,
+    currentUser: AuthenticatedUser,
+  ): Promise<Account> {
+    await this.findOneOwned(id, currentUser);
+    const hoy = todayIso();
+    const fechaCaida = dto.fechaCaida?.slice(0, 10) ?? hoy;
+    // Ambas 'YYYY-MM-DD': la comparación de strings es cronológica.
+    if (fechaCaida > hoy) {
+      throw new BadRequestException(
+        `La fecha de caída (${fechaCaida}) no puede ser futura.`,
+      );
+    }
+    await this.accountsRepository.update(id, { fechaCaida });
+    return this.findOneOwned(id, currentUser);
+  }
+
+  // La cuenta se marcó como caída por error: solo limpia la marca. No toca
+  // ninguna fecha de vencimiento ni crea ajustes (para eso está restore()).
+  async unmarkDown(id: string, currentUser: AuthenticatedUser): Promise<Account> {
+    const account = await this.findOneOwned(id, currentUser);
+    if (!account.fechaCaida) {
+      throw new BadRequestException('La cuenta no está marcada como caída.');
+    }
+    await this.accountsRepository.update(id, { fechaCaida: null });
+    return this.findOneOwned(id, currentUser);
+  }
+
+  // El proveedor repuso la cuenta caída con otra: se actualiza la MISMA
+  // cuenta (credenciales y perfiles nuevos) y a cada cliente se le suman los
+  // días sin servicio a su misma fecha de vencimiento. Todo en UNA
+  // transacción: si algo falla, no cambia ninguna credencial, fecha ni
+  // ajuste. No crea ningún pago al proveedor (la reposición es gratis), así
+  // que Contabilidad no cambia. Mismo scoping que el detalle (findOneOwned →
+  // 404 si es ajena).
+  async restore(
+    id: string,
+    dto: RestoreAccountDto,
+    currentUser: AuthenticatedUser,
+  ): Promise<Account & { compensacion: AccountCompensacion }> {
+    await this.findOneOwned(id, currentUser);
+
+    const compensacion = await this.dataSource.transaction(async (manager) => {
+      // Bloquea la fila: dos reposiciones a la vez no compensan dos veces
+      // (la segunda ya ve fecha_caida en null y recibe el 400).
+      const cuenta = await manager.findOne(Account, {
+        where: { id },
+        select: { id: true, fechaCaida: true },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!cuenta?.fechaCaida) {
+        throw new BadRequestException(
+          'La cuenta no está marcada como caída: no hay nada que reponer.',
+        );
+      }
+      const fechaCaida = cuenta.fechaCaida;
+      const hoy = todayIso();
+      const fechaReposicion = dto.fechaReposicion?.slice(0, 10) ?? hoy;
+      if (fechaReposicion > hoy) {
+        throw new BadRequestException(
+          `La fecha de reposición (${fechaReposicion}) no puede ser futura.`,
+        );
+      }
+      if (fechaReposicion < fechaCaida) {
+        throw new BadRequestException(
+          `La fecha de reposición (${fechaReposicion}) no puede ser anterior a la de caída (${fechaCaida}).`,
+        );
+      }
+      const dias =
+        dto.diasCompensacion ?? daysBetween(fechaCaida, fechaReposicion);
+
+      const perfiles = dto.perfiles ?? [];
+      if (perfiles.length > 0) {
+        const propios = await manager.count(Profile, {
+          where: { id: In(perfiles.map((perfil) => perfil.id)), cuentaId: id },
+        });
+        if (propios !== perfiles.length) {
+          throw new NotFoundException(
+            `Alguno de los perfiles indicados no pertenece a la cuenta ${id}`,
+          );
+        }
+      }
+
+      // Credenciales cifradas por el transformer de la columna, igual que
+      // en update(). Lo que no viene en el body queda como estaba.
+      await manager.update(Account, id, {
+        correo: dto.correo,
+        ...(dto.claveServicio !== undefined && {
+          claveServicio: dto.claveServicio,
+        }),
+        ...(dto.claveCorreo !== undefined && { claveCorreo: dto.claveCorreo }),
+        fechaCaida: null,
+      });
+      for (const perfil of perfiles) {
+        const cambios: Partial<Pick<Profile, 'nombre' | 'pin'>> = {};
+        if (perfil.nombre !== undefined) {
+          cambios.nombre = perfil.nombre;
+        }
+        if (perfil.pin !== undefined) {
+          cambios.pin = perfil.pin;
+        }
+        if (Object.keys(cambios).length > 0) {
+          await manager.update(Profile, { id: perfil.id, cuentaId: id }, cambios);
+        }
+      }
+
+      // Ventas sueltas activas de la cuenta, y combos activos con al menos
+      // una hija activa acá. El Set deja cada combo UNA vez aunque tenga
+      // varias hijas en la cuenta.
+      const sueltas = await manager.find(Sale, {
+        where: { cuentaId: id, activo: true, ventaComboId: IsNull() },
+        select: { id: true, clienteId: true },
+      });
+      const hijas = await manager
+        .createQueryBuilder(Sale, 'sale')
+        .innerJoin('sale.ventaCombo', 'combo')
+        .select(['sale.id', 'sale.clienteId', 'sale.ventaComboId'])
+        .where('sale.cuentaId = :id', { id })
+        .andWhere('sale.activo = true')
+        .andWhere('combo.activo = true')
+        .getMany();
+      const comboIds = [...new Set(hijas.map((hija) => hija.ventaComboId!))];
+
+      // Con 0 días no hay nada que compensar: la cuenta se repone igual,
+      // pero no se tocan fechas ni se registran ajustes de "+0 días".
+      if (dias > 0) {
+        const sumarDias = { fechaFin: () => '"fecha_fin" + CAST(:dias AS int)' };
+        if (sueltas.length > 0) {
+          await manager
+            .createQueryBuilder()
+            .update(Sale)
+            .set(sumarDias)
+            .where({ id: In(sueltas.map((venta) => venta.id)) })
+            .setParameter('dias', dias)
+            .execute();
+        }
+        if (comboIds.length > 0) {
+          // El combo y TODAS sus hijas (también las de otras cuentas): el
+          // combo vence en una sola fecha, igual que en ComboSalesService.
+          // renew().
+          await manager
+            .createQueryBuilder()
+            .update(VentaCombo)
+            .set(sumarDias)
+            .where({ id: In(comboIds) })
+            .setParameter('dias', dias)
+            .execute();
+          await manager
+            .createQueryBuilder()
+            .update(Sale)
+            .set(sumarDias)
+            .where({ ventaComboId: In(comboIds) })
+            .setParameter('dias', dias)
+            .execute();
+        }
+        const ajuste = {
+          cuentaId: id,
+          tipo: SaleAdjustmentType.COMPENSACION,
+          dias,
+          fechaCaida,
+          fechaReposicion,
+          motivo: null,
+        };
+        await manager.save(
+          [
+            ...sueltas.map((venta) => ({
+              ...ajuste,
+              ventaId: venta.id,
+              ventaComboId: null,
+            })),
+            ...comboIds.map((ventaComboId) => ({
+              ...ajuste,
+              ventaId: null,
+              ventaComboId,
+            })),
+          ].map((valores) => manager.create(SaleAdjustment, valores)),
+        );
+      }
+
+      const compensadas = dias > 0;
+      return {
+        dias,
+        fechaCaida,
+        fechaReposicion,
+        ventas: compensadas ? sueltas.length : 0,
+        combos: compensadas ? comboIds.length : 0,
+        clientes: compensadas
+          ? new Set([...sueltas, ...hijas].map((venta) => venta.clienteId)).size
+          : 0,
+      };
+    });
+
+    const account = await this.findOneOwned(id, currentUser);
+    return { ...account, compensacion };
+  }
+
+  // Cuentas caídas sin reponer, la que lleva más días primero. Scoping
+  // igual que findAllOwned (REVENDEDOR → solo las suyas). No filtra por
+  // `activo`: una cuenta desactivada que sigue caída igual tiene clientes
+  // esperando.
+  async caidas(currentUser: AuthenticatedUser): Promise<AccountCaida[]> {
+    const qb = this.accountsRepository
+      .createQueryBuilder('account')
+      .leftJoin('account.servicio', 'servicio')
+      .leftJoin('account.owner', 'owner')
+      .select('account.id', 'id')
+      .addSelect('account.correo', 'correo')
+      .addSelect('account.servicioId', 'servicioId')
+      .addSelect('servicio.nombre', 'servicioNombre')
+      .addSelect('owner.name', 'ownerName')
+      .addSelect('CAST(account.fechaCaida AS text)', 'fechaCaida')
+      .addSelect('(CURRENT_DATE - account.fechaCaida)', 'diasCaida')
+      .addSelect(
+        `(SELECT COUNT(DISTINCT s.cliente_id) FROM sales s
+          WHERE s.cuenta_id = account.id AND s.activo = true)`,
+        'clientesAfectados',
+      )
+      .where('account.fechaCaida IS NOT NULL')
+      .orderBy('account.fechaCaida', 'ASC')
+      .addOrderBy('account.correo', 'ASC');
+    if (currentUser.role === UserRole.REVENDEDOR) {
+      qb.andWhere('account.ownerId = :ownerId', { ownerId: currentUser.id });
+    }
+    const rows = await qb.getRawMany<{
+      id: string;
+      correo: string;
+      servicioId: string;
+      servicioNombre: string | null;
+      ownerName: string | null;
+      fechaCaida: string;
+      diasCaida: number | string;
+      clientesAfectados: number | string;
+    }>();
+    return rows.map((row) => ({
+      id: row.id,
+      correo: row.correo,
+      servicioId: row.servicioId,
+      servicioNombre: row.servicioNombre ?? '—',
+      fechaCaida: row.fechaCaida,
+      // El reloj de Postgres y el del servidor pueden diferir en el día:
+      // nunca un "-1 días".
+      diasCaida: Math.max(0, Number(row.diasCaida)),
+      clientesAfectados: Number(row.clientesAfectados),
+      ownerName: resolveOwnerName(row.ownerName ?? undefined, currentUser),
+    }));
+  }
+
+  // De estas cuentas, cuáles están caídas. Lo usan SalesService y
+  // ComboSalesService para el campo `cuentaCaida` de cada venta.
+  async idsCaidas(ids: string[]): Promise<Set<string>> {
+    if (ids.length === 0) {
+      return new Set();
+    }
+    const caidas = await this.accountsRepository.find({
+      where: { id: In([...new Set(ids)]), fechaCaida: Not(IsNull()) },
+      select: { id: true },
+    });
+    return new Set(caidas.map((cuenta) => cuenta.id));
   }
 
   // Historial de pagos al proveedor de la cuenta (compra inicial +

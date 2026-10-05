@@ -99,6 +99,12 @@ export class Account {
   @Column({ type: 'boolean', default: true })
   activo: boolean;
 
+  // Bloque — Cuentas caídas: desde qué día la cuenta dejó de funcionar. No
+  // null = la cuenta está "caída" hasta que el proveedor la reponga (ver
+  // AccountsService.markDown/restore, que la vuelve a dejar en null).
+  @Column({ type: 'date', name: 'fecha_caida', nullable: true })
+  fechaCaida: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

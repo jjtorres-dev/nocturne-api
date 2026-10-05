@@ -36,6 +36,14 @@ export class ComboSalesController {
     return this.comboSalesService.findAllOwned(query, currentUser);
   }
 
+  @Get(':id/adjustments')
+  adjustments(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ) {
+    return this.comboSalesService.adjustments(id, currentUser);
+  }
+
   @Get(':id')
   findOne(
     @Param('id', ParseUUIDPipe) id: string,

@@ -19,6 +19,8 @@ import { UpdateAccountDto } from './dto/update-account.dto.js';
 import { QueryAccountDto } from './dto/query-account.dto.js';
 import { QueryPorRenovarDto } from './dto/query-por-renovar.dto.js';
 import { RenewProviderDto } from './dto/renew-provider.dto.js';
+import { MarkDownDto } from './dto/mark-down.dto.js';
+import { RestoreAccountDto } from './dto/restore-account.dto.js';
 
 const DIAS_POR_RENOVAR_DEFAULT = 7;
 
@@ -50,6 +52,12 @@ export class AccountsController {
       query.dias ?? DIAS_POR_RENOVAR_DEFAULT,
       currentUser,
     );
+  }
+
+  // Bloque — Cuentas caídas. También antes de `:id`, por lo mismo.
+  @Get('caidas')
+  caidas(@CurrentUser() currentUser: AuthenticatedUser) {
+    return this.accountsService.caidas(currentUser);
   }
 
   @Get(':id/rentabilidad')
@@ -110,6 +118,35 @@ export class AccountsController {
     @CurrentUser() currentUser: AuthenticatedUser,
   ) {
     return this.accountsService.renewProvider(id, dto, currentUser);
+  }
+
+  @Post(':id/mark-down')
+  markDown(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: MarkDownDto,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ) {
+    return this.accountsService.markDown(id, dto, currentUser);
+  }
+
+  // Se marcó por error: limpia la marca sin compensar nada.
+  @Post(':id/unmark-down')
+  unmarkDown(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ) {
+    return this.accountsService.unmarkDown(id, currentUser);
+  }
+
+  // Reposición del proveedor: credenciales nuevas + días compensados a cada
+  // cliente, atómico. No crea ningún pago al proveedor.
+  @Post(':id/restore')
+  restore(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RestoreAccountDto,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ) {
+    return this.accountsService.restore(id, dto, currentUser);
   }
 
   @Patch(':id/reactivate')

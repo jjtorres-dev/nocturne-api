@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, IsNull, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, IsNull, Not, Repository } from 'typeorm';
 import { VentaCombo } from './entities/venta-combo.entity.js';
 import { CreateComboSaleDto } from './dto/create-combo-sale.dto.js';
 import { UpdateComboSaleDto } from './dto/update-combo-sale.dto.js';
@@ -17,6 +17,7 @@ import { Combo } from '../combos/entities/combo.entity.js';
 import { Account } from '../accounts/entities/account.entity.js';
 import { Profile } from '../accounts/profiles/entities/profile.entity.js';
 import { Sale } from '../sales/entities/sale.entity.js';
+import { SaleAdjustment } from '../sales/entities/sale-adjustment.entity.js';
 import { Service } from '../services/entities/service.entity.js';
 import { ServiceType } from '../services/service-type.enum.js';
 import { Payment } from '../payments/entities/payment.entity.js';
@@ -220,13 +221,14 @@ export class ComboSalesService {
     if (!ventaCombo) {
       throw new NotFoundException(`VentaCombo ${id} no encontrada`);
     }
-    return ventaCombo;
+    const [conCuentaCaida] = await this.withCuentaCaida([ventaCombo]);
+    return conCuentaCaida;
   }
 
   // Punto de entrada para el controller: un REVENDEDOR SIEMPRE queda
   // acotado a lo suyo acá, sin depender de que el cliente mande el filtro
   // correcto — la seguridad vive en el backend.
-  findAllOwned(
+  async findAllOwned(
     query: QueryComboSaleDto,
     currentUser: AuthenticatedUser,
   ): Promise<VentaCombo[]> {
@@ -245,12 +247,14 @@ export class ComboSalesService {
     if (currentUser.role === UserRole.REVENDEDOR) {
       where.ownerId = currentUser.id;
     }
-    return this.ventaCombosRepository.find({
-      where,
-      relations: { owner: true },
-      select: OWNED_SELECT,
-      order: { createdAt: 'DESC' },
-    });
+    return this.withCuentaCaida(
+      await this.ventaCombosRepository.find({
+        where,
+        relations: { owner: true },
+        select: OWNED_SELECT,
+        order: { createdAt: 'DESC' },
+      }),
+    );
   }
 
   // Un REVENDEDOR pidiendo una VentaCombo ajena recibe 404, no 403: no hay
@@ -274,7 +278,22 @@ export class ComboSalesService {
     ) {
       throw new NotFoundException(`VentaCombo ${id} no encontrada`);
     }
-    return ventaCombo;
+    const [conCuentaCaida] = await this.withCuentaCaida([ventaCombo]);
+    return conCuentaCaida;
+  }
+
+  // Historial de ajustes de la venta de combo (hoy: días compensados por
+  // una cuenta caída), del más reciente al más antiguo. Mismo scoping que
+  // el detalle (findOneOwned → 404 si es ajena).
+  async adjustments(
+    id: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<SaleAdjustment[]> {
+    await this.findOneOwned(id, currentUser);
+    return this.dataSource.getRepository(SaleAdjustment).find({
+      where: { ventaComboId: id },
+      order: { createdAt: 'DESC' },
+    });
   }
 
   // Buscador global (ver src/search/): LIMIT 5, acotado por ownerId con el
@@ -356,6 +375,20 @@ export class ComboSalesService {
       }
       const ventas = await manager.find(Sale, { where: { ventaComboId: id } });
 
+      // Bloque — Cuentas caídas: mismo criterio que create(), con que una
+      // sola cuenta del combo esté caída no se reactiva ninguna hija.
+      const caidas = await manager.find(Account, {
+        where: {
+          id: In(ventas.map((venta) => venta.cuentaId)),
+          fechaCaida: Not(IsNull()),
+        },
+      });
+      if (caidas.length > 0) {
+        throw new BadRequestException(
+          'La cuenta está caída: no se puede reactivar la venta de combo hasta que el proveedor reponga todas sus cuentas.',
+        );
+      }
+
       // Fase 1: revalidar exclusividad de TODAS las ventas hijas antes de
       // reactivar ninguna. Ver assertAsignacionSigueLibre: esto corre SIN
       // scope de ownership a propósito, ni siquiera para el admin.
@@ -412,6 +445,33 @@ export class ComboSalesService {
       await manager.save(payment);
     });
     return this.findOne(id);
+  }
+
+  // Bloque — Cuentas caídas: marca cada VentaCombo con alguna venta hija
+  // activa en una cuenta caída (ver Sale.cuentaCaida). Una sola consulta
+  // para todo el listado.
+  private async withCuentaCaida(
+    ventasCombo: VentaCombo[],
+  ): Promise<VentaCombo[]> {
+    if (ventasCombo.length === 0) {
+      return ventasCombo;
+    }
+    const rows = await this.dataSource
+      .getRepository(Sale)
+      .createQueryBuilder('sale')
+      .innerJoin('sale.cuenta', 'cuenta')
+      .select('DISTINCT sale.ventaComboId', 'ventaComboId')
+      .where('sale.ventaComboId IN (:...ids)', {
+        ids: ventasCombo.map((ventaCombo) => ventaCombo.id),
+      })
+      .andWhere('sale.activo = true')
+      .andWhere('cuenta.fechaCaida IS NOT NULL')
+      .getRawMany<{ ventaComboId: string }>();
+    const caidos = new Set(rows.map((row) => row.ventaComboId));
+    for (const ventaCombo of ventasCombo) {
+      ventaCombo.cuentaCaida = caidos.has(ventaCombo.id);
+    }
+    return ventasCombo;
   }
 
   // Ni de más ni de menos: cada servicioId del combo debe aparecer
@@ -486,6 +546,12 @@ export class ComboSalesService {
     });
     if (!cuenta || cuenta.ownerId !== ownerId) {
       throw new NotFoundException(`Cuenta ${asignacion.cuentaId} no encontrada`);
+    }
+    // Bloque — Cuentas caídas: mismo criterio que SalesService.create.
+    if (cuenta.fechaCaida) {
+      throw new BadRequestException(
+        `El servicio "${servicio.nombre}": la cuenta está caída, no se puede vender hasta que el proveedor la reponga.`,
+      );
     }
     if (cuenta.servicioId !== asignacion.servicioId) {
       throw new BadRequestException(

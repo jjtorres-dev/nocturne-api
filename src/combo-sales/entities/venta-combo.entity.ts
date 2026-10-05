@@ -112,6 +112,10 @@ export class VentaCombo {
   @OneToMany(() => Sale, (sale) => sale.ventaCombo)
   ventas: Sale[];
 
+  // No es una columna: lo completa ComboSalesService en sus respuestas.
+  // true si alguna venta hija activa está en una cuenta caída.
+  cuentaCaida?: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

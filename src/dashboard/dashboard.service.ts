@@ -25,7 +25,8 @@ export class DashboardService {
   // (SalesService.summaryOwned): REVENDEDOR → solo lo suyo, ADMIN → todo el
   // negocio.
   // Libre = perfil activo sin cliente en una cuenta activa, o (servicios sin
-  // perfiles) cuenta activa sin cliente.
+  // perfiles) cuenta activa sin cliente. Las cuentas caídas no cuentan: no
+  // se pueden vender hasta que el proveedor las reponga.
   async inventario(currentUser: AuthenticatedUser): Promise<InventarioItem[]> {
     const ownerId =
       currentUser.role === UserRole.REVENDEDOR ? currentUser.id : undefined;
@@ -45,12 +46,14 @@ export class DashboardService {
       .where('profile.activo = true')
       .andWhere('profile.clienteId IS NULL')
       .andWhere('cuenta.activo = true')
+      .andWhere('cuenta.fechaCaida IS NULL')
       .groupBy('cuenta.servicioId');
     const cuentasQb = this.accountsRepository
       .createQueryBuilder('cuenta')
       .select('cuenta.servicioId', 'servicioId')
       .addSelect('COUNT(*)', 'libres')
       .where('cuenta.activo = true')
+      .andWhere('cuenta.fechaCaida IS NULL')
       .andWhere('cuenta.clienteId IS NULL')
       .groupBy('cuenta.servicioId');
     if (ownerId) {

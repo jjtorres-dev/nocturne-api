@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Sale } from './entities/sale.entity.js';
+import { SaleAdjustment } from './entities/sale-adjustment.entity.js';
 import { SalesService } from './sales.service.js';
 import { SalesController } from './sales.controller.js';
 import { AccountsModule } from '../accounts/accounts.module.js';
@@ -11,7 +12,7 @@ import { PaymentsModule } from '../payments/payments.module.js';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Sale]),
+    TypeOrmModule.forFeature([Sale, SaleAdjustment]),
     AccountsModule,
     ProfilesModule,
     ServicesModule,

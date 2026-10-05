@@ -7,6 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository, SelectQueryBuilder } from 'typeorm';
 import { Sale } from './entities/sale.entity.js';
+import { SaleAdjustment } from './entities/sale-adjustment.entity.js';
 import { CreateSaleDto } from './dto/create-sale.dto.js';
 import { UpdateSaleDto } from './dto/update-sale.dto.js';
 import { QuerySaleDto } from './dto/query-sale.dto.js';
@@ -83,6 +84,13 @@ export class SalesService {
       dto.cuentaId,
       currentUser.id,
     );
+    // Bloque — Cuentas caídas: mientras el proveedor no la reponga, ni la
+    // cuenta ni sus perfiles se venden (el cliente arrancaría sin servicio).
+    if (cuenta.fechaCaida) {
+      throw new BadRequestException(
+        'La cuenta está caída: no se puede vender hasta que el proveedor la reponga.',
+      );
+    }
     const requierePerfil =
       servicio.tipo === ServiceType.CON_PERFILES ||
       servicio.tipo === ServiceType.FAMILIAR;
@@ -180,14 +188,18 @@ export class SalesService {
   // acotado a lo suyo acá, en TODOS los endpoints de lectura (incluidos
   // vencimiento/summary), sin depender de que el cliente mande el filtro
   // correcto — la seguridad vive en el backend.
-  findAllOwned(
+  // Cada venta lleva `cuentaCaida` (ver withCuentaCaida), también en el
+  // listado por vencimiento.
+  async findAllOwned(
     query: QuerySaleDto,
     currentUser: AuthenticatedUser,
   ): Promise<Sale[]> {
     const ownerId =
       currentUser.role === UserRole.REVENDEDOR ? currentUser.id : undefined;
     if (query.vencimiento) {
-      return this.findAllByVencimientoOwned(query, ownerId);
+      return this.withCuentaCaida(
+        await this.findAllByVencimientoOwned(query, ownerId),
+      );
     }
     const where: Partial<
       Pick<Sale, 'clienteId' | 'servicioId' | 'activo' | 'ownerId'>
@@ -204,12 +216,14 @@ export class SalesService {
     if (ownerId) {
       where.ownerId = ownerId;
     }
-    return this.salesRepository.find({
-      where,
-      relations: { owner: true },
-      select: OWNED_SELECT,
-      order: { createdAt: 'DESC' },
-    });
+    return this.withCuentaCaida(
+      await this.salesRepository.find({
+        where,
+        relations: { owner: true },
+        select: OWNED_SELECT,
+        order: { createdAt: 'DESC' },
+      }),
+    );
   }
 
   summaryOwned(
@@ -294,6 +308,25 @@ export class SalesService {
     if (ownerId) {
       qb.andWhere('sale.ownerId = :ownerId', { ownerId });
     }
+    // Bloque — Cuentas caídas: las tarjetas del Inicio cuentan lo que hay
+    // que cobrar, y a un cliente sin servicio no se le cobra. Quedan afuera
+    // las ventas con la cuenta caída y las hijas de un combo que tenga
+    // CUALQUIER hija activa en una cuenta caída (el combo se cobra entero).
+    // El listado por vencimiento (findAllByVencimientoOwned) sí las trae,
+    // marcadas con `cuentaCaida`.
+    qb.andWhere(
+      `NOT EXISTS (
+        SELECT 1 FROM accounts caida
+        WHERE sale.cuentaId = caida.id AND caida.fecha_caida IS NOT NULL
+      )`,
+    ).andWhere(
+      `NOT EXISTS (
+        SELECT 1 FROM sales hija
+        INNER JOIN accounts caida ON caida.id = hija.cuenta_id
+        WHERE sale.ventaComboId = hija.venta_combo_id AND hija.activo = true
+          AND caida.fecha_caida IS NOT NULL
+      )`,
+    );
     this.applyVencimientoCondition(qb, vencimiento, diasAlerta);
     return qb.getCount();
   }
@@ -351,7 +384,25 @@ export class SalesService {
     ) {
       throw new NotFoundException(`Venta ${id} no encontrada`);
     }
-    return sale;
+    const [conCuentaCaida] = await this.withCuentaCaida([sale]);
+    return conCuentaCaida;
+  }
+
+  // Historial de ajustes de la venta (hoy: días compensados por una cuenta
+  // caída), del más reciente al más antiguo. Una venta hija de combo no
+  // tiene ajustes propios: se registran una vez en su VentaCombo, así que
+  // devuelve esos. Mismo scoping que el detalle (findOneOwned → 404).
+  async adjustments(
+    id: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<SaleAdjustment[]> {
+    const sale = await this.findOneOwned(id, currentUser);
+    return this.salesRepository.manager.find(SaleAdjustment, {
+      where: sale.ventaComboId
+        ? { ventaComboId: sale.ventaComboId }
+        : { ventaId: id },
+      order: { createdAt: 'DESC' },
+    });
   }
 
   // Buscador global (ver src/search/): LIMIT 5, acotado por ownerId con el
@@ -413,6 +464,14 @@ export class SalesService {
   async reactivate(id: string, currentUser: AuthenticatedUser): Promise<Sale> {
     const sale = await this.findOneOwned(id, currentUser);
     this.assertNoPerteneceAUnCombo(sale);
+    // Bloque — Cuentas caídas: mismo criterio que create(), reactivar es
+    // volver a vender sobre la cuenta.
+    const cuenta = await this.accountsService.findOne(sale.cuentaId);
+    if (cuenta.fechaCaida) {
+      throw new BadRequestException(
+        'La cuenta está caída: no se puede reactivar la venta hasta que el proveedor la reponga.',
+      );
+    }
     // La exclusividad (assertPerfilLibre/assertCuentaLibre) mira TODA la
     // tabla `sales`, sin filtrar por dueño: un perfil/cuenta ocupado por la
     // venta de otro usuario sigue estando ocupado para cualquiera, admin
@@ -461,6 +520,19 @@ export class SalesService {
     });
 
     return this.findOneOwned(id, currentUser);
+  }
+
+  // Bloque — Cuentas caídas: marca cada venta cuya cuenta está caída, para
+  // que el frontend no la muestre "para cobrar" mientras el cliente no tiene
+  // servicio. Una sola consulta para todo el listado.
+  private async withCuentaCaida(sales: Sale[]): Promise<Sale[]> {
+    const caidas = await this.accountsService.idsCaidas(
+      sales.map((sale) => sale.cuentaId),
+    );
+    for (const sale of sales) {
+      sale.cuentaCaida = caidas.has(sale.cuentaId);
+    }
+    return sales;
   }
 
   private async liberar(sale: Sale): Promise<void> {

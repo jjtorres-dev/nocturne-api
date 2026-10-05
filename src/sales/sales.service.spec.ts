@@ -131,6 +131,7 @@ describe('SalesService', () => {
   let accountsService: {
     findOne: ReturnType<typeof vi.fn>;
     assignCliente: ReturnType<typeof vi.fn>;
+    idsCaidas: ReturnType<typeof vi.fn>;
   };
   let profilesService: {
     findOne: ReturnType<typeof vi.fn>;
@@ -164,6 +165,8 @@ describe('SalesService', () => {
     accountsService = {
       findOne: vi.fn().mockResolvedValue(cuenta),
       assignCliente: vi.fn().mockResolvedValue(undefined),
+      // Ninguna cuenta caída salvo que un test lo pise.
+      idsCaidas: vi.fn().mockResolvedValue(new Set<string>()),
     };
     profilesService = {
       findOne: vi.fn().mockResolvedValue(perfil),
@@ -186,6 +189,17 @@ describe('SalesService', () => {
   });
 
   describe('create', () => {
+    it('rechaza vender sobre una cuenta caída, sin crear nada', async () => {
+      accountsService.findOne.mockResolvedValue({ ...cuenta, fechaCaida: '2026-01-03' });
+
+      await expect(salesService.create(createDto, revendedorA)).rejects.toThrow(
+        'La cuenta está caída',
+      );
+      expect(salesRepo.save).not.toHaveBeenCalled();
+      expect(profilesService.assignCliente).not.toHaveBeenCalled();
+      expect(paymentsService.create).not.toHaveBeenCalled();
+    });
+
     it('exige perfilId si el servicio es CON_PERFILES', async () => {
       await expect(
         salesService.create({ ...createDto, perfilId: undefined }, revendedorA),
@@ -466,6 +480,17 @@ describe('SalesService', () => {
         BadRequestException,
       );
       expect(salesRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('rechaza reactivar si la cuenta está caída, sin tocar la venta ni el perfil', async () => {
+      salesRepo.findOne.mockResolvedValue({ ...baseSale, activo: false });
+      accountsService.findOne.mockResolvedValue({ ...cuenta, fechaCaida: '2026-01-03' });
+
+      await expect(salesService.reactivate('sale-1', revendedorA)).rejects.toThrow(
+        'La cuenta está caída',
+      );
+      expect(salesRepo.save).not.toHaveBeenCalled();
+      expect(profilesService.assignCliente).not.toHaveBeenCalled();
     });
 
     it('reasigna el perfil si sigue libre', async () => {

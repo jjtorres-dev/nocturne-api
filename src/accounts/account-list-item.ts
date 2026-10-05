@@ -15,6 +15,7 @@ export interface AccountListItem {
   url: string | null;
   renovacionAutomatica: boolean;
   activo: boolean;
+  fechaCaida: string | null;
   perfilesCount: number;
   createdAt: Date;
   updatedAt: Date;
