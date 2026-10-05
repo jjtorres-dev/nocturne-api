@@ -2637,7 +2637,7 @@ había quedado en el bloque de textos.
       desglose, sin scroll horizontal ni errores de consola). Datos de
       prueba borrados después.
 
-## Cuentas caídas y reposición del proveedor (`nocturne-api` + `nocturne-web`) — 🚧 implementada y verificada, sin commitear (2026-10-04)
+## Cuentas caídas y reposición del proveedor (`nocturne-api` + `nocturne-web`) — ✅ completa, commiteada y pusheada a `origin/main` (2026-10-05)
 
 Feedback real: a veces una cuenta del proveedor se cae para siempre y el
 proveedor la repone gratis con otra. Los clientes de esa cuenta tienen que
@@ -2814,3 +2814,10 @@ proveedor.
       (Prueba hecha antes de los ajustes de arriba; el botón "Quitar marca
       de caída" y las cascadas quedaron cubiertos por tests, no por una
       segunda pasada en navegador.)
+
+### Commits
+
+- `nocturne-api` `54ea565` feat: add down accounts with provider restore and
+  day compensation for affected sales
+- `nocturne-web` `1f694dd` feat: add mark down, restore and unmark flows for
+  accounts, down-account chips and Inicio card
