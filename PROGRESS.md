@@ -2899,3 +2899,95 @@ español para cualquier persona y navegador es no usar el calendario nativo.
 - `nocturne-web` `2816abe` fix: set document language to es-PE
 - `nocturne-web` `a91f587` feat: replace native date inputs with Spanish
   datepicker field
+
+## Rediseño visual "Cartelera", modo claro y oscuro (`nocturne-web` + `nocturne-api`) — ✅ completa, commiteada y pusheada a `origin/redesign` (2026-10-06)
+
+Rediseño completo del panel sobre un sistema de diseño propio, documentado
+en `nocturne-web/DESIGN.md` (y el contexto de producto en
+`nocturne-web/PRODUCT.md`). Se trabajó en la rama `redesign` de los dos
+repos. Se publica a `main` con fast-forward, backend primero y frontend
+después: el frontend nuevo usa un campo que agrega el backend.
+
+### Backend (`nocturne-api`)
+
+- [x] **`GET /api/dashboard/inventario` devuelve `total`** por servicio,
+      además de `libres`: el mismo universo sin mirar el cliente (perfiles
+      activos de cuentas activas y no caídas, o cuentas activas y no caídas
+      en los servicios sin perfiles). Solo se agrega un campo: un frontend
+      anterior sigue funcionando. Sin migraciones ni cambios de entidades.
+
+### Frontend (`nocturne-web`)
+
+- [x] **Sistema "Cartelera"**: una cartelera de cine de barrio. Tablero
+      claro con rieles bajo cada título, riel de navegación rojo butaca con
+      la sección actual en ámbar, Archivo en dos anchos, color plano y
+      estados con color propio (vencida, por vencer, al día, caída, libre).
+      Todo color es un token `--nc-*` de `src/styles.scss`.
+- [x] **Todas las pantallas rediseñadas**: layout (riel, barra superior y,
+      en celular, barra inferior con Inicio, Ventas, Vencimientos, Cuentas y
+      Menú), buscador global, Inicio, login en dos mitades con favicon
+      nuevo, Ventas, Vencimientos, Cuentas y su detalle, Clientes y
+      proveedores, Servicios, Combos, Ventas de combos y su detalle, Gastos,
+      Contabilidad, Usuarios, Configuración y el menú del usuario.
+- [x] **Kit de listas compartido**: tablero con encabezados de cartelera,
+      tarjetas en celular en vez de tabla, filtros plegados tras un botón
+      "Filtros" en celular, y estados de carga, vacío y error comunes. Los
+      diálogos comparten título sobre riel, zona de scroll y botones fijos.
+- [x] **Inicio**: tarjetas de estado, cuentas por pagar al proveedor,
+      cuentas caídas, ganancia del mes y "Disponible para vender" con una
+      butaca por perfil o cuenta, libre u ocupada (usa `total`).
+- [x] **Modo oscuro** ("una sala de cine con las luces apagadas"): opción
+      "Tema" en el menú del usuario con Claro, Oscuro y Según el
+      dispositivo. La app arranca en claro; la elección se guarda en el
+      navegador de cada dispositivo (`localStorage`, `nocturne_theme`) y un
+      script en `index.html` la aplica antes del primer pintado, sin
+      parpadeo. Solo redefine tokens; el gráfico de Contabilidad se vuelve a
+      dibujar al cambiar de tema.
+- [x] **Dinero**: los montos negativos se muestran con el signo delante de
+      la moneda ("−S/ 253.00") en toda la app; los CSV siguen exportando el
+      número solo.
+
+### Verificación
+
+- [x] `nocturne-api`: `npm run lint`, `npm run build`, `npm test` (291
+      tests) y `npm run test:e2e` completa (23 archivos, 145 tests) pasan.
+- [x] `nocturne-web`: `npm run lint`, `npm test` (777 tests) y
+      `npm run build` (producción) pasan.
+- [x] Capturas de todas las pantallas a 1440 px y 360 px, en claro y en
+      oscuro, con el administrador y con un revendedor, más una medición
+      automática del contraste de texto (solo marcó botones deshabilitados).
+- [ ] Pendiente de ver a mano: el autocompletado del navegador en modo
+      oscuro, con contraseñas guardadas (no se pudo provocar en el navegador
+      sin interfaz).
+
+### Commits
+
+- `nocturne-api` `cfd991a` feat: include total seats per service in
+  dashboard inventory
+- `nocturne-web` `6432a8a` chore: ignore Impeccable install and ephemeral files
+- `nocturne-web` `6cbb866` chore: ignore local Claude settings
+- `nocturne-web` `e2bf340` docs: add PRODUCT.md and Impeccable live config
+- `nocturne-web` `9bf8222` docs: refine reseller scope and privacy principle in PRODUCT.md
+- `nocturne-web` `96065d6` feat: redesign panel layout, global search and Inicio with Cartelera design system
+- `nocturne-web` `355ec57` fix: refine Inicio after review with real data
+- `nocturne-web` `c6e5b17` fix: equal-width state cards, Ganancia legend row and larger seats on Inicio
+- `nocturne-web` `7d506c1` feat: redesign login as two halves with all states and new favicon
+- `nocturne-web` `ebc3508` fix: refine login states, keyboard handling, field focus and favicon after review
+- `nocturne-web` `bc5a9e6` fix: unify login notices and user dialogs on "ingresar"
+- `nocturne-web` `2d4cfde` test: make clipboard mock writable to stop order-dependent failures
+- `nocturne-web` `a32bd15` fix: stop field hints overlapping the next label, keep dialog content clear of its actions, and relax login password validation
+- `nocturne-web` `33b8a49` fix: keep long password labels clear of the field icons in Nueva cuenta
+- `nocturne-web` `cc5e714` feat: redesign Ventas and Vencimientos with shared list kit, states and dialog polish
+- `nocturne-web` `ffac864` fix: sort Vencimientos by date and show due-date urgency on mobile sale cards
+- `nocturne-web` `044c38f` feat: redesign Cuentas and collapse list filters behind a "Filtros" button on mobile
+- `nocturne-web` `df95ba6` feat: redesign Clientes y proveedores with the shared list kit and one-tap WhatsApp
+- `nocturne-web` `5ae2b13` fix: show every menu label in full and document Cuentas and Clientes y proveedores in DESIGN.md
+- `nocturne-web` `5b77f58` feat: redesign Servicios, Combos and Ventas de combos with the shared list kit
+- `nocturne-web` `b996963` fix: show "Cómo se vende" in short form in the Servicios table and mobile cards
+- `nocturne-web` `2dc628d` feat: redesign Contabilidad, Gastos and the combo sale detail, and fix the chart series colors
+- `nocturne-web` `f7fff1e` test: give the three slowest cold-start tests their own 15 s timeout
+- `nocturne-web` `21ae3b0` fix: show the default period in Contabilidad and use the app's date and money formats in the chart
+- `nocturne-web` `fa0f07a` feat: redesign Usuarios, Configuración and the user menu
+- `nocturne-web` `493712a` fix: put the minus sign before the currency in negative amounts and clear the dialog loading and token debt
+- `nocturne-web` `bcd49ed` feat: add dark mode with a theme choice in the user menu
+- `nocturne-web` `21d16fb` fix: outline the chart tooltip swatches and tone down the Inicio status cards in dark mode
