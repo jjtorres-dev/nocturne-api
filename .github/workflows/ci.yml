@@ -36,6 +36,10 @@ jobs:
       ACCESS_TOKEN_EXPIRES_IN: 15m
       REFRESH_TOKEN_EXPIRES_IN: 30d
       ENCRYPTION_KEY: abababababababababababababababababababababababababababababababab
+      # Admin de pruebas: lo crea el paso "Seed admin" y es con quien las e2e
+      # inician sesión. Valores propios del CI, nunca los de producción.
+      ADMIN_EMAIL: ci-admin@example.com
+      ADMIN_PASSWORD: ci-only-admin-password
 
     steps:
       - uses: actions/checkout@v4
@@ -56,6 +60,21 @@ jobs:
 
       - name: Unit tests
         run: npm test
+
+      # La Postgres del job arranca vacía: las e2e necesitan el esquema y el
+      # usuario admin, igual que en local (README, "Cómo correrlo").
+      # Primero la tabla `users`, que es anterior a las migraciones (ver el
+      # .sql); después las migraciones y el admin, sobre el build de arriba.
+      - name: Create pre-migration schema
+        run: psql -v ON_ERROR_STOP=1 -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USERNAME" -d "$DB_NAME" -f .github/ci/phase0-users.sql
+        env:
+          PGPASSWORD: ${{ env.DB_PASSWORD }}
+
+      - name: Run migrations
+        run: npm run typeorm -- migration:run
+
+      - name: Seed admin
+        run: node dist/seed.js
 
       - name: E2E tests
         run: npm run test:e2e
