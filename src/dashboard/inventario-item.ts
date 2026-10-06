@@ -7,6 +7,9 @@ export interface InventarioItem {
   // completas (SIN_PERFILES/IPTV).
   usaPerfiles: boolean;
   libres: number;
+  // Libres + ocupados, en la misma unidad que `libres` (las cuentas caídas
+  // tampoco cuentan acá).
+  total: number;
   // Solo para ADMIN (mismo criterio que el buscador global): el admin ve
   // los servicios de todos, y dos revendedores pueden tener un "Netflix".
   ownerName?: string;

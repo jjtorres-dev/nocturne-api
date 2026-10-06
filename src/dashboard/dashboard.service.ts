@@ -27,6 +27,7 @@ export class DashboardService {
   // Libre = perfil activo sin cliente en una cuenta activa, o (servicios sin
   // perfiles) cuenta activa sin cliente. Las cuentas caídas no cuentan: no
   // se pueden vender hasta que el proveedor las reponga.
+  // Total = el mismo universo sin mirar el cliente (libres + ocupados).
   async inventario(currentUser: AuthenticatedUser): Promise<InventarioItem[]> {
     const ownerId =
       currentUser.role === UserRole.REVENDEDOR ? currentUser.id : undefined;
@@ -42,19 +43,25 @@ export class DashboardService {
       .createQueryBuilder('profile')
       .innerJoin('profile.cuenta', 'cuenta')
       .select('cuenta.servicioId', 'servicioId')
-      .addSelect('COUNT(*)', 'libres')
+      .addSelect('COUNT(*)', 'total')
+      .addSelect(
+        'SUM(CASE WHEN profile.clienteId IS NULL THEN 1 ELSE 0 END)',
+        'libres',
+      )
       .where('profile.activo = true')
-      .andWhere('profile.clienteId IS NULL')
       .andWhere('cuenta.activo = true')
       .andWhere('cuenta.fechaCaida IS NULL')
       .groupBy('cuenta.servicioId');
     const cuentasQb = this.accountsRepository
       .createQueryBuilder('cuenta')
       .select('cuenta.servicioId', 'servicioId')
-      .addSelect('COUNT(*)', 'libres')
+      .addSelect('COUNT(*)', 'total')
+      .addSelect(
+        'SUM(CASE WHEN cuenta.clienteId IS NULL THEN 1 ELSE 0 END)',
+        'libres',
+      )
       .where('cuenta.activo = true')
       .andWhere('cuenta.fechaCaida IS NULL')
-      .andWhere('cuenta.clienteId IS NULL')
       .groupBy('cuenta.servicioId');
     if (ownerId) {
       serviciosQb.andWhere('servicio.ownerId = :ownerId', { ownerId });
@@ -62,14 +69,19 @@ export class DashboardService {
       cuentasQb.andWhere('cuenta.ownerId = :ownerId', { ownerId });
     }
 
-    type Row = { servicioId: string; libres: string };
+    type Row = { servicioId: string; libres: string; total: string };
     const [servicios, perfilesLibres, cuentasLibres] = await Promise.all([
       serviciosQb.getMany(),
       perfilesQb.getRawMany<Row>(),
       cuentasQb.getRawMany<Row>(),
     ]);
     const toMap = (rows: Row[]) =>
-      new Map(rows.map((r) => [r.servicioId, parseInt(r.libres, 10)]));
+      new Map(
+        rows.map((r) => [
+          r.servicioId,
+          { libres: parseInt(r.libres, 10), total: parseInt(r.total, 10) },
+        ]),
+      );
     const perfilesById = toMap(perfilesLibres);
     const cuentasById = toMap(cuentasLibres);
 
@@ -77,12 +89,15 @@ export class DashboardService {
       const usaPerfiles =
         servicio.tipo === ServiceType.CON_PERFILES ||
         servicio.tipo === ServiceType.FAMILIAR;
-      const libres = usaPerfiles ? perfilesById : cuentasById;
+      const conteo = (usaPerfiles ? perfilesById : cuentasById).get(
+        servicio.id,
+      );
       return {
         servicioId: servicio.id,
         nombre: servicio.nombre,
         usaPerfiles,
-        libres: libres.get(servicio.id) ?? 0,
+        libres: conteo?.libres ?? 0,
+        total: conteo?.total ?? 0,
         ownerName: resolveOwnerName(servicio.owner?.name, currentUser),
       };
     });

@@ -380,6 +380,7 @@ describe('Bloque C — rentabilidad, inventario y cuentas por renovar (e2e)', ()
       nombre: string;
       usaPerfiles: boolean;
       libres: number;
+      total: number;
       ownerName?: string;
     }[];
   }
@@ -471,11 +472,13 @@ describe('Bloque C — rentabilidad, inventario y cuentas por renovar (e2e)', ()
       const completa = inventario.find((i) => i.servicioId === servicioCompletaId);
       // cuentaRentable: 4 perfiles - 3 ocupados = 1; cuentaSinVentas: 4
       // perfiles - 1 desactivado = 3; cuentaPerfilesInactiva: 0 (inactiva).
-      expect(perfiles).toMatchObject({ usaPerfiles: true, libres: 4 });
+      // Total: 4 de cuentaRentable + 3 activos de cuentaSinVentas.
+      expect(perfiles).toMatchObject({ usaPerfiles: true, libres: 4, total: 7 });
       // Activas sin cliente: cuentaCompletaLibre, cuentaVenceHoy,
       // cuentaVenceEn8. cuentaCompletaCombo está ocupada por el combo y
       // cuentaInactivaVencida está inactiva.
-      expect(completa).toMatchObject({ usaPerfiles: false, libres: 3 });
+      // Total: las 3 libres + cuentaCompletaCombo (ocupada).
+      expect(completa).toMatchObject({ usaPerfiles: false, libres: 3, total: 4 });
       // Un REVENDEDOR nunca recibe ownerName.
       expect(perfiles?.ownerName).toBeUndefined();
     });
@@ -488,6 +491,7 @@ describe('Bloque C — rentabilidad, inventario y cuentas por renovar (e2e)', ()
           nombre: expect.any(String),
           usaPerfiles: false,
           libres: 1,
+          total: 1,
         },
       ]);
 
